@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="https://chat.openai.com/favicon-32x32.png"
+    />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>有可用的更新</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, Helvetica, Arial, sans-serif,
+          "Microsoft YaHei", "ST Heiti";
+        color: #333;
+        padding: 20px;
+        background-color: #f5f5f5;
+      }
+
+      .title {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 10px;
+      }
+
+      .content {
+        margin-top: 8px;
+        margin-bottom: 12px;
+        margin-left: -20px;
+        margin-right: -20px;
+        height: 200px;
+        overflow: auto;
+        padding: 0 20px;
+      }
+
+      .content ul {
+        padding-left: 20px;
+        margin-top: 5px;
+        margin-bottom: 10px;
+      }
+
+      .content ul li {
+        margin-bottom: 4px;
+      }
+
+      .buttons-box {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .buttons-box button {
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: bold;
+        border-radius: 5px;
+        border: none;
+        cursor: pointer;
+        margin-left: 12px;
+      }
+
+      .buttons-box button:first-child {
+        background-color: #007bff;
+        color: #fff;
+      }
+
+      .buttons-box button:last-child {
+        background-color: #ccc;
+        color: #333;
+      }
+
+      .buttons-box button:first-child:hover {
+        background-color: #0056b3;
+      }
+
+      .buttons-box button:last-child:hover {
+        background-color: #b3b3b3;
+      }
+
+      .title-bar {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-start;
+        align-items: center;
+      }
+
+      .title-bar img {
+        margin-right: 12px;
+      }
+
+      .loading-box {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        background: rgba(255, 255, 255, 0.9);
+        font-size: 18px;
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        display: none;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loading-box">软件更新中……</div>
+    <div class="title-bar">
+      <img src="" width="34" class="logo" style="display: none" />
+      <span>有可用的新版本：</span>
+    </div>
+    <div class="content">具体更新内容请查看 Changelogs</div>
+    <div class="buttons-box">
+      <button id="updateBtn">现在更新</button>
+      <button id="skipBtn">稍后再提醒我</button>
+    </div>
+
+    <script>
+      const { ipcRenderer } = require("electron");
+
+      document.querySelector("#updateBtn").addEventListener("click", () => {
+        ipcRenderer.send("evd-update-now");
+        document.querySelector(".loading-box").style.display = "flex";
+      });
+
+      document.querySelector("#skipBtn").addEventListener("click", () => {
+        ipcRenderer.send("evd-skip");
+      });
+
+      ipcRenderer.invoke("evd-get-logo").then((link) => {
+        if (link) {
+          const imgRef = document.querySelector(".logo");
+          imgRef.src = link;
+          imgRef.style.display = "inline-block";
+        }
+      });
+
+      ipcRenderer.invoke("evd-get-change-logs").then((data) => {
+        //  如果没有数据就不渲染
+        if (!data) return;
+
+        const contentRef = document.querySelector(".content");
+
+        contentRef.innerHTML = `
+        <p class="title">${data.title}</p>
+        ${data.changes}
+        `;
+
+        //  监听所有 A 链接点击
+        Array.from(document.querySelectorAll("a")).map((a) => {
+          a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+
+            ipcRenderer.send("evd-open-link", ev.target.href);
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
