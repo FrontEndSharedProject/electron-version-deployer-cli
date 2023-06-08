@@ -73,6 +73,16 @@ EVDInit({
     //  记录更新检测遇到的错误
     writeError(error, "evd");
   },
+  onBeforeNewPkgInstall(next) {
+    //  window 下如果某些程序正在使用 node_modules 会导致
+    //  Error: EBUSY: resource busy or locked 错误
+
+    //  因此在安装前, 你可以手动关闭这些程序
+    DB.close();
+
+    //  执行 next 方法，继续安装
+    next();
+  },
 });
 ```
 
@@ -95,6 +105,7 @@ type EVDInitPropsType = {
   detectAtStart?: boolean;
   //  当自动更新出现错误时的回掉
   onError?: (err: unknown) => void;
+  onBeforeNewPkgInstall?: (next: () => any) => void;
 };
 ```
 

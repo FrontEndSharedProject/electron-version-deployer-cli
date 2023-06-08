@@ -45,6 +45,8 @@ type EVDInitPropsType = {
   detectAtStart?: boolean;
   //  当自动更新出现错误时的回掉
   onError?: (err: unknown) => void;
+  //  在开始安装前调用，可以在里面关闭一些数据库连接之类的
+  onBeforeNewPkgInstall?: (next: () => any) => void;
 };
 
 let globalArgs: EVDInitPropsType | null = null;
@@ -220,7 +222,7 @@ async function installPkg(zipFile: string) {
 }
 
 function bindEvent(promptWindow: BrowserWindow) {
-  const { logo } = getConfigs();
+  const { logo, onBeforeNewPkgInstall } = getConfigs();
 
   ipcMain.on(EVDEventEnum.OPEN_LINK, (_, link) => {
     shell.openExternal(link);
@@ -231,10 +233,12 @@ function bindEvent(promptWindow: BrowserWindow) {
   });
 
   ipcMain.on(EVDEventEnum.UPDATE, (_) => {
-    installNewVersion().then(() => {
-      promptWindow.close();
-      app.relaunch();
-      app.exit();
+    onBeforeNewPkgInstall(() => {
+      installNewVersion().then(() => {
+        promptWindow.close();
+        app.relaunch();
+        app.exit();
+      });
     });
   });
 
@@ -271,6 +275,9 @@ function getConfigs(): Required<EVDInitPropsType> {
   return {
     ...{
       onError: () => {},
+      onBeforeNewPkgInstall: (next) => {
+        next();
+      },
       windowHeight: 360,
       windowWidth: 400,
       logo: undefined,
