@@ -1,6 +1,6 @@
 import { BrowserWindow, ipcMain, app, shell } from "electron";
 import { format } from "node:url";
-import { join, basename } from "node:path";
+import { join, sep } from "node:path";
 import {
   fetchRemoteChangelogJSON,
   fetchRemotePkgJSON,
@@ -227,19 +227,25 @@ async function installPkg(zipFile: string) {
       __appPath__: appPath,
     }).reduce((prev, current) => {
       const [key, value] = current;
-      return prev.replace(key, value);
+      return prev.replace(key, value.split(sep).join("/"));
     }, installerCodeStr as string)
   );
 
   await new Promise((res) => setTimeout(res, 1000));
 
   //  开始执行安装
-  fork(join(appPath, "_evdInstallerTmp.js"), {
+  const child = fork(join(appPath, "_evdInstallerTmp.js"), {
     cwd: appPath,
     stdio: "inherit",
   });
 
-  await new Promise((res) => setTimeout(res, 5000));
+  //  copy 需要事件，等待子进程执行完毕，或者超过 10 秒
+  await Promise.race([
+    new Promise((res) => {
+      child.on("exit", () => res);
+    }),
+    new Promise((res) => setTimeout(res, 10 * 1000)),
+  ]);
 }
 
 function bindEvent(promptWindow: BrowserWindow) {

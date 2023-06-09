@@ -49,7 +49,20 @@ function copyFolderRecursiveSync(source, target) {
       copyFolderRecursiveSync(sourcePath, targetPath);
     } else {
       // 否则，复制文件
-      copyFileSync(sourcePath, targetPath);
+      try {
+        copyFileSync(sourcePath, targetPath);
+      } catch (error) {
+        appendFileSync(
+          resolve(__dirname, "evdInstallerErrors.txt"),
+          `
+        ${new Date().toString()}\n
+        ${error.toString()}\n
+        -- stack\n
+        ${error.stack}\n
+        ----------------------------------------------------------------\n
+      `
+        );
+      }
     }
   });
 }
