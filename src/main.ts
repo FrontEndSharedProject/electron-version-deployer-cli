@@ -12,12 +12,14 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
 import { get } from "node:https";
 import extract from "extract-zip";
-import { readdirSync, statSync, writeFileSync } from "node:fs";
 import { CLI_NAME } from "@/const";
+import installerCodeStr from "./installer?raw";
+import { fork } from "node:child_process";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -181,6 +183,7 @@ async function installPkg(zipFile: string) {
   const appPath = app.getAppPath();
 
   const unzipPath = join(appPath, "evdUnzip");
+  const installerFile = join(appPath, "_evdInstallerTmp.js");
 
   // 如果路径存在，清空它
   if (existsSync(unzipPath)) {
@@ -215,10 +218,28 @@ async function installPkg(zipFile: string) {
   //  等待解压完成，解压需要一定时间
   await new Promise((res) => setTimeout(res, 1000));
 
-  //  覆盖安装
-  copyFolderRecursiveSync(unzipPath, appPath);
+  //  创建一个临时的 _evdInstallerTmp.js 文件用于 fork 安装
+  //  避免出现 window 下资源占用问题
+  writeFileSync(
+    installerFile,
+    Object.entries({
+      __unzipPath__: unzipPath,
+      __appPath__: appPath,
+    }).reduce((prev, current) => {
+      const [key, value] = current;
+      return prev.replace(key, value);
+    }, installerCodeStr as string)
+  );
 
   await new Promise((res) => setTimeout(res, 1000));
+
+  //  开始执行安装
+  fork(join(appPath, "_evdInstallerTmp.js"), {
+    cwd: appPath,
+    stdio: "inherit",
+  });
+
+  await new Promise((res) => setTimeout(res, 5000));
 }
 
 function bindEvent(promptWindow: BrowserWindow) {
@@ -287,41 +308,4 @@ function getConfigs(): Required<EVDInitPropsType> {
     },
     ...globalArgs,
   };
-}
-
-function copyFileSync(source, target) {
-  let targetFile = target;
-
-  if (existsSync(target)) {
-    if (statSync(target).isDirectory()) {
-      targetFile = join(target, basename(source));
-    }
-  }
-
-  writeFileSync(targetFile, readFileSync(source));
-}
-
-// 复制文件夹及其内容的函数
-function copyFolderRecursiveSync(source, target) {
-  // 如果目标目录不存在，则创建目标目录
-  if (!existsSync(target)) {
-    mkdirSync(target);
-  }
-
-  // 获取源目录的文件列表
-  const files = readdirSync(source);
-
-  // 遍历文件列表，处理每个文件或子目录
-  files.forEach((file) => {
-    const sourcePath = join(source, file);
-    const targetPath = join(target, file);
-
-    // 如果当前文件是文件夹，则递归复制文件夹
-    if (statSync(sourcePath).isDirectory()) {
-      copyFolderRecursiveSync(sourcePath, targetPath);
-    } else {
-      // 否则，复制文件
-      copyFileSync(sourcePath, targetPath);
-    }
-  });
 }
