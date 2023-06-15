@@ -8,6 +8,7 @@ import { r } from "../utils";
 import { spawn } from "node:child_process";
 import { fetchRemotePkgJSON } from "@/helpers/fetchRemotePkgJSON";
 import { versionToNum } from "@/utils/versionToNum";
+import { platform } from "node:os";
 
 program
   .command("deploy")
@@ -29,8 +30,9 @@ program
 async function deploy(configs: EVDConfigType) {
   console.log(logSymbols.info, "开始部署", r());
 
+  const cmd = platform() === "win32" ? "netlify.cmd" : "netlify";
   // prettier-ignore
-  const output = spawn("netlify", [
+  const output = spawn(cmd, [
     "deploy",
     "--dir", r("node_modules/.evd"),
     "--site", configs.netlify.siteID,
