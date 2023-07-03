@@ -20,6 +20,7 @@ import extract from "extract-zip";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
 import { fork } from "node:child_process";
+import { platform } from "node:process";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -112,11 +113,12 @@ async function showNewVersionDialog() {
         minWidth: windowWidth,
         minHeight: windowHeight,
         resizable: false,
-        minimizable: true,
+        minimizable: false,
         fullscreenable: false,
         maximizable: false,
         skipTaskbar: true,
-        alwaysOnTop: true,
+        //  windows 11 如果设置为 true 会导致点击后马上消失
+        alwaysOnTop: platform !== "win32",
         useContentSize: false,
         title: "有可用的更新",
         webPreferences: {
@@ -147,6 +149,19 @@ async function showNewVersionDialog() {
 
       promptWindow.once("ready-to-show", () => {
         promptWindow.show();
+
+        setTimeout(() => {
+          const allWindows = BrowserWindow.getAllWindows();
+          // 遍历每个窗口实例，并添加 'closed' 事件监听器
+          allWindows.forEach((window) => {
+            window.on("closed", () => {
+              //  如果只剩下一个窗口，关闭自己
+              if (BrowserWindow.getAllWindows().length == 1) {
+                cleanup(promptWindow);
+              }
+            });
+          });
+        }, 1000);
       });
 
       promptWindow.once("close", () => {
@@ -289,11 +304,13 @@ function cleanup(promptWindow: BrowserWindow) {
   ipcMain.removeHandler(EVDEventEnum.GET_CHANGELOGS);
   ipcMain.removeHandler(EVDEventEnum.GET_LOGO);
 
-  promptWindow?.focus();
+  try {
+    promptWindow?.focus();
 
-  if (promptWindow) {
-    promptWindow.destroy();
-  }
+    if (promptWindow) {
+      promptWindow.destroy();
+    }
+  } catch (e) {}
 }
 
 function getConfigs(): Required<EVDInitPropsType> {
