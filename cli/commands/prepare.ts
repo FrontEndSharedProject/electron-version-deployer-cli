@@ -91,6 +91,18 @@ async function copySourceAndZipFiles(configs: EVDConfigType) {
   //  将 package.json 放进去
   copyFileSync(packageJSONPath, r("node_modules/.evd/package.json"));
 
+  //  写入 netlify.toml 文件
+  writeFileSync(
+    r("node_modules/.evd/netlify.toml"),
+    `[[headers]]
+  for = "/*"
+    [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "*"
+    Access-Control-Allow-Headers = "*"`,
+    "utf-8"
+  );
+
   console.log(logSymbols.success, "更新包创建成功！");
 }
 
