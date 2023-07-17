@@ -259,7 +259,7 @@ async function installPkg(zipFile: string) {
     new Promise((res) => {
       child.on("exit", () => res);
     }),
-    new Promise((res) => setTimeout(res, 10 * 1000)),
+    new Promise((res) => setTimeout(res, 2 * 60 * 1000)),
   ]);
 }
 
