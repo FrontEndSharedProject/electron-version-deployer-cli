@@ -12,22 +12,24 @@ const {
 } = require("fs");
 const { join, resolve, basename } = require("node:path");
 
-setTimeout(() => {
-  try {
-    copyFolderRecursiveSync("__unzipPath__", "__appPath__");
-  } catch (error) {
-    appendFileSync(
-      resolve(__dirname, "evdInstallerErrors.txt"),
-      `
+try {
+  copyFolderRecursiveSync("__unzipPath__", "__appPath__");
+  process.parentPort.postMessage("exitManually");
+  process.exit(0);
+} catch (error) {
+  appendFileSync(
+    resolve(__dirname, "evdInstallerErrors.txt"),
+    `
         ${new Date().toString()}\n
         ${error.toString()}\n
         -- stack\n
         ${error.stack}\n
         ----------------------------------------------------------------\n
       `
-    );
-  }
-}, 1);
+  );
+  process.parentPort.postMessage("exitManually");
+  process.exit(0);
+}
 
 // 复制文件夹及其内容的函数
 function copyFolderRecursiveSync(source, target) {

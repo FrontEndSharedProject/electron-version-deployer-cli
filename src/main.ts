@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, app, shell } from "electron";
+import { BrowserWindow, ipcMain, app, shell, utilityProcess } from "electron";
 import { format } from "node:url";
 import { join, sep } from "node:path";
 import {
@@ -249,17 +249,21 @@ async function installPkg(zipFile: string) {
   await new Promise((res) => setTimeout(res, 1000));
 
   //  开始执行安装
-  const child = fork(join(appPath, "_evdInstallerTmp.js"), {
-    cwd: appPath,
-    stdio: "inherit",
-  });
+  const child = utilityProcess.fork(join(appPath, "_evdInstallerTmp.js"));
 
   //  copy 需要事件，等待子进程执行完毕，或者超过 10 秒
   await Promise.race([
     new Promise((res) => {
       child.on("exit", () => res);
     }),
-    new Promise((res) => setTimeout(res, 2 * 60 * 1000)),
+    new Promise((res) => {
+      child.on("message", (msg) => {
+        if (msg === "exitManually") {
+          res(void 0);
+        }
+      });
+    }),
+    new Promise((res) => setTimeout(res, 5 * 60 * 1000)),
   ]);
 }
 
