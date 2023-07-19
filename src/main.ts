@@ -19,7 +19,6 @@ import { get } from "node:https";
 import extract from "extract-zip";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
-import { fork } from "node:child_process";
 import { platform } from "node:process";
 
 const id = `${Date.now()}-${Math.random()}`;
@@ -169,7 +168,7 @@ async function showNewVersionDialog() {
       });
 
       //  事件处理
-      bindEvent(promptWindow);
+      bindEvent(promptWindow, onError);
     } catch (e) {
       onError(e);
     }
@@ -267,7 +266,7 @@ async function installPkg(zipFile: string) {
   ]);
 }
 
-function bindEvent(promptWindow: BrowserWindow) {
+function bindEvent(promptWindow: BrowserWindow, onError) {
   const { logo, onBeforeNewPkgInstall } = getConfigs();
 
   ipcMain.on(EVDEventEnum.OPEN_LINK, (_, link) => {
@@ -280,11 +279,17 @@ function bindEvent(promptWindow: BrowserWindow) {
 
   ipcMain.on(EVDEventEnum.UPDATE, (_) => {
     onBeforeNewPkgInstall(() => {
-      installNewVersion().then(() => {
-        promptWindow.close();
-        app.relaunch();
-        app.exit();
-      });
+      installNewVersion()
+        .then(() => {
+          //  不知道什么情况会出现
+          //  UnhandledRejection TypeError: Object has been destroyed
+          setTimeout(() => promptWindow.close(), 1);
+          setTimeout(() => app.relaunch(), 1);
+          setTimeout(() => app.exit(), 1);
+        })
+        .catch((e) => {
+          onError(e);
+        });
     });
   });
 
@@ -310,10 +315,7 @@ function cleanup(promptWindow: BrowserWindow) {
 
   try {
     promptWindow?.focus();
-
-    if (promptWindow) {
-      promptWindow.destroy();
-    }
+    promptWindow?.destroy();
   } catch (e) {}
 }
 
