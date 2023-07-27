@@ -59,6 +59,7 @@ export class Netlify implements ProviderInterface {
       if (!configs.netlify.siteID) {
         return `configs.netlify.siteID 未配置`;
       }
+      return;
     }
 
     return `configs.netlify 配置不存在`;

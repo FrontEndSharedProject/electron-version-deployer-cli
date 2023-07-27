@@ -61,6 +61,8 @@ export class Cloudflare implements ProviderInterface {
       if (!configs.cloudflare.projectName) {
         return `configs.cloudflare.projectName 未配置`;
       }
+
+      return;
     }
 
     return `configs.cloudflare 配置不存在`;
