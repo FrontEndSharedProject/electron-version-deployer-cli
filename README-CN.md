@@ -33,18 +33,19 @@ $ npm install electron-version-deployer-cli
 
 ```json
 {
-  "electron": ">=10.0.0",
   "@inquirer/prompts": "^1.2.3",
   "changelog-parser": "^3.0.1",
   "commander": "^10.0.1",
   "dompurify": "^3.0.3",
   "download": "^8.0.0",
+  "electron": ">=10.0.0",
   "esno": "^0.16.3",
   "jsdom": "^22.1.0",
   "log-symbols": "=4.1.0",
   "marked": "^5.0.4",
   "netlify-cli": "^15.2.0",
-  "vite": "^4.3.9"
+  "vite": "^4.3.9",
+  "wrangler": "^3.3.0"
 }
 ```
 
@@ -61,7 +62,7 @@ $ npm install electron-version-deployer-cli
 import { EVDInit } from "electron-version-deployer-cli/dist/main";
 
 EVDInit({
-  netlifyUrl: import.meta.env.REMOTE_URL,
+  remoteUrl: import.meta.env.REMOTE_URL,
   logo: `file://${join(
     app.getAppPath(),
     "packages",
@@ -73,7 +74,7 @@ EVDInit({
     //  记录更新检测遇到的错误
     writeError(error, "evd");
   },
-  onBeforeNewPkgInstall(next) {
+  onBeforeNewPkgInstall(next, version:string) {
     //  window 下如果某些程序正在使用 node_modules 会导致
     //  Error: EBUSY: resource busy or locked 错误
 
@@ -91,7 +92,7 @@ EVDInit 方法接受的参数如下
 ```typescript
 type EVDInitPropsType = {
   //  检测远程更新的地址
-  netlifyUrl: string;
+  remoteUrl: string;
 
   //  弹窗宽度
   windowWidth?: number;
@@ -116,9 +117,6 @@ type EVDInitPropsType = {
 ```shell
 # 进入命令行交互模式
 $ evd init
-
-# 直接生成配置，与 npm init -y 行为类似
-$ evd init -y
 ```
 
 该命令主要是生成一个 evd.config.js 的配置文件。
@@ -153,11 +151,16 @@ export type EVDConfigType = {
     packageJSON: string;
   };
   //  netlify 部署设置
-  netlify: {
+  netlify?: {
     //  网站域名如 https://site.netlify.app
     url: string;
     token: string;
     siteID: string;
+  };
+  cloudflare?: {
+    url: string;
+    token: string;
+    projectName: string;
   };
   prebuiltConfig: PrebuiltConfigType;
 };

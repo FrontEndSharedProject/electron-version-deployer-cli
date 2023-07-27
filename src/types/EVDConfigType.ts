@@ -36,11 +36,16 @@ export type EVDConfigType = {
     packageJSON: string;
   };
   //  netlify 部署设置
-  netlify: {
+  netlify?: {
     //  网站域名如 https://site.netlify.app
     url: string;
     token: string;
     siteID: string;
+  };
+  cloudflare?: {
+    url: string;
+    token: string;
+    projectName: string;
   };
   prebuiltConfig: PrebuiltConfigType;
 };

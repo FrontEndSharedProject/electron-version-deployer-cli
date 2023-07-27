@@ -5,10 +5,10 @@ import { EVDConfigType } from "@/types/EVDConfigType";
 import { confirm } from "@inquirer/prompts";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { r } from "../utils";
-import { spawn } from "node:child_process";
 import { fetchRemotePkgJSON } from "@/helpers/fetchRemotePkgJSON";
 import { versionToNum } from "@/utils/versionToNum";
-import { platform } from "node:os";
+import { Netlify } from "./hostingProvider/Netlify";
+import { Cloudflare } from "./hostingProvider/Cloudflare";
 
 program
   .command("deploy")
@@ -30,25 +30,9 @@ program
 async function deploy(configs: EVDConfigType) {
   console.log(logSymbols.info, "开始部署", r());
 
-  const cmd = platform() === "win32" ? "netlify.cmd" : "netlify";
-  // prettier-ignore
-  const output = spawn(cmd, [
-    "deploy",
-    "--dir", r("node_modules/.evd"),
-    "--site", configs.netlify.siteID,
-    "--auth", configs.netlify.token,
-    "--prod",
-    "--debug",
-  ],{
-    stdio: ["pipe", "inherit", "inherit"]
-  });
-
-  output.on("exit", function (code) {
-    if (code === 0) {
-      console.log(logSymbols.success, "部署完成！");
-      return;
-    }
-    throw new Error("部署失败！");
+  await getWhichProvider(configs).deploy({
+    folder: r("node_modules/.evd"),
+    configs: configs,
   });
 }
 
@@ -57,11 +41,12 @@ async function deploy(configs: EVDConfigType) {
  * @param configs
  */
 async function validateRemotePackageJSON(configs: EVDConfigType) {
+  const url = getWhichProvider(configs).getUrl(configs);
   const compiledPackageJSON = JSON.parse(
     readFileSync(r("node_modules/.evd/package.json"), "utf-8")
   );
   const compiledName = compiledPackageJSON.name;
-  const remotePKG = await fetchRemotePkgJSON(configs.netlify.url);
+  const remotePKG = await fetchRemotePkgJSON(url);
   if (!remotePKG) return;
 
   const remoteName = remotePKG.name;
@@ -98,10 +83,12 @@ async function validateRemotePackageJSON(configs: EVDConfigType) {
 }
 
 async function checkIsFirstTimeDeploy(configs: EVDConfigType) {
-  const remotePKG = await fetchRemotePkgJSON(configs.netlify.url);
+  const url = getWhichProvider(configs).getUrl(configs);
+
+  const remotePKG = await fetchRemotePkgJSON(url);
   if (!remotePKG) {
     const answer = await confirm({
-      message: `似乎 ${configs.netlify.url} 还未部署过任何版本，确认继续吗？`,
+      message: `似乎 ${url} 还未部署过任何版本，确认继续吗？`,
     });
     if (!answer) {
       throw new Error("部署已停止！");
@@ -114,17 +101,28 @@ async function checkIsFirstTimeDeploy(configs: EVDConfigType) {
  * @param configs
  */
 async function validateConfigs(configs: EVDConfigType) {
-  if (!configs.netlify.url || !/^https/.test(configs.netlify.url)) {
-    throw new Error(`configs.netlify.url 配置不正确`);
-  }
+  const error = getWhichProvider(configs).validateConfig(configs);
+  if (error) throw new Error(error);
+}
 
-  if (!configs.netlify.token) {
-    throw new Error(`configs.netlify.token 未配置`);
-  }
+export function getWhichProvider(configs: EVDConfigType) {
+  if (
+    configs.netlify &&
+    configs.netlify.url &&
+    configs.netlify.siteID &&
+    configs.netlify.token
+  )
+    return Netlify.instance;
 
-  if (!configs.netlify.siteID) {
-    throw new Error(`configs.netlify.siteID 未配置`);
-  }
+  if (
+    configs.cloudflare &&
+    configs.cloudflare.projectName &&
+    configs.cloudflare.token &&
+    configs.cloudflare.url
+  )
+    return Cloudflare.instance;
+
+  throw new Error("未提供/配置不正确 configs.netlify / configs.cloudflare");
 }
 
 //  判断 .evd 文件夹是否存在

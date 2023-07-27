@@ -15,5 +15,10 @@ export default defineEVDConfig({
     token: __netlify_token__,
     siteID: __netlify_siteID__,
   },
+  cloudflare: {
+    url: __cloudflare_url__,
+    token: __cloudflare_token__,
+    projectName: __cloudflare_projectName__,
+  },
   prebuiltConfig: {},
 });

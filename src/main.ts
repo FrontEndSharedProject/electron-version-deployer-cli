@@ -34,6 +34,7 @@ export enum EVDEventEnum {
 type EVDInitPropsType = {
   //  检测远程更新的地址
   netlifyUrl: string;
+  remoteUrl: string;
 
   //  弹窗宽度
   windowWidth?: number;
@@ -48,7 +49,7 @@ type EVDInitPropsType = {
   //  当自动更新出现错误时的回掉
   onError?: (err: unknown) => void;
   //  在开始安装前调用，可以在里面关闭一些数据库连接之类的
-  onBeforeNewPkgInstall?: (next: () => any) => void;
+  onBeforeNewPkgInstall?: (next: () => any, version: string) => void;
 };
 
 let globalArgs: EVDInitPropsType | null = null;
@@ -56,6 +57,14 @@ let cacheChangelogs: any = null;
 let cacheCurrentPkgJSON: any = null;
 
 export function EVDInit(props: EVDInitPropsType) {
+  //  废弃参数检测
+  if (props.netlifyUrl) {
+    props.remoteUrl = props.netlifyUrl;
+    console.warn(
+      "EVDInit 中的 netlifyUrl 参数已废弃，将会在下个主版本更新时删除，请使用 remoteUrl 代替"
+    );
+  }
+
   globalArgs = props;
   const { detectionFrequency, detectAtStart, onError } = getConfigs();
 
@@ -84,10 +93,10 @@ export function EVDInit(props: EVDInitPropsType) {
 }
 
 export async function EVDCheckUpdate() {
-  const { netlifyUrl } = getConfigs();
+  const { remoteUrl } = getConfigs();
   const { version } = cacheCurrentPkgJSON;
-  const remoteJSON = await fetchRemotePkgJSON(netlifyUrl);
-  if (!remoteJSON) throw new Error(`${netlifyUrl}package.json 文件不存在`);
+  const remoteJSON = await fetchRemotePkgJSON(remoteUrl);
+  if (!remoteJSON) throw new Error(`${remoteUrl}package.json 文件不存在`);
 
   const localVersion = versionToNum(version);
   const remoteVersion = versionToNum(remoteJSON.version);
@@ -177,9 +186,9 @@ async function showNewVersionDialog() {
 
 //  安装新版本
 async function installNewVersion() {
-  const { netlifyUrl, onError } = getConfigs();
+  const { remoteUrl, onError } = getConfigs();
 
-  const remoteJSON = await fetchRemotePkgJSON(netlifyUrl);
+  const remoteJSON = await fetchRemotePkgJSON(remoteUrl);
   const needInstallFullSize = compareObjectsIsEqual(
     remoteJSON.dependencies,
     cacheCurrentPkgJSON.dependencies
@@ -193,7 +202,7 @@ async function installNewVersion() {
 }
 
 async function installPkg(zipFile: string) {
-  const { netlifyUrl } = getConfigs();
+  const { remoteUrl } = getConfigs();
   const appPath = app.getAppPath();
 
   const unzipPath = join(appPath, "evdUnzip");
@@ -212,7 +221,7 @@ async function installPkg(zipFile: string) {
   //  下载文件
   const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
   await new Promise<void>((res, rej) =>
-    get(`${netlifyUrl}/${zipFile}`, (response) => {
+    get(`${remoteUrl}/${zipFile}`, (response) => {
       response
         .pipe(tmpZipFilePath)
         .on("finish", () => {
@@ -267,7 +276,7 @@ async function installPkg(zipFile: string) {
 }
 
 function bindEvent(promptWindow: BrowserWindow, onError) {
-  const { logo, onBeforeNewPkgInstall } = getConfigs();
+  const { logo, onBeforeNewPkgInstall, remoteUrl } = getConfigs();
 
   ipcMain.on(EVDEventEnum.OPEN_LINK, (_, link) => {
     shell.openExternal(link);
@@ -278,18 +287,20 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
   });
 
   ipcMain.on(EVDEventEnum.UPDATE, (_) => {
-    onBeforeNewPkgInstall(() => {
-      installNewVersion()
-        .then(() => {
-          //  不知道什么情况会出现
-          //  UnhandledRejection TypeError: Object has been destroyed
-          setTimeout(() => promptWindow.close(), 1);
-          setTimeout(() => app.relaunch(), 1);
-          setTimeout(() => app.exit(), 1);
-        })
-        .catch((e) => {
-          onError(e);
-        });
+    fetchRemotePkgJSON(remoteUrl).then((pkg) => {
+      onBeforeNewPkgInstall(() => {
+        installNewVersion()
+          .then(() => {
+            //  不知道什么情况会出现
+            //  UnhandledRejection TypeError: Object has been destroyed
+            setTimeout(() => promptWindow.close(), 1);
+            setTimeout(() => app.relaunch(), 1);
+            setTimeout(() => app.exit(), 1);
+          })
+          .catch((e) => {
+            onError(e);
+          });
+      }, pkg.version);
     });
   });
 
@@ -298,11 +309,11 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
   });
 
   ipcMain.handle(EVDEventEnum.GET_CHANGELOGS, async () => {
-    const { netlifyUrl } = getConfigs();
+    const { remoteUrl } = getConfigs();
 
     return cacheChangelogs
       ? cacheChangelogs
-      : await fetchRemoteChangelogJSON(netlifyUrl);
+      : await fetchRemoteChangelogJSON(remoteUrl);
   });
 }
 
@@ -325,7 +336,7 @@ function getConfigs(): Required<EVDInitPropsType> {
   return {
     ...{
       onError: () => {},
-      onBeforeNewPkgInstall: (next) => {
+      onBeforeNewPkgInstall: (next, version: string) => {
         next();
       },
       windowHeight: 360,

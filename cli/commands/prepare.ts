@@ -91,6 +91,9 @@ async function copySourceAndZipFiles(configs: EVDConfigType) {
   //  将 package.json 放进去
   copyFileSync(packageJSONPath, r("node_modules/.evd/package.json"));
 
+  //  note: cloudflare 需要去配置 cors
+  //  https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/cors/
+
   //  写入 netlify.toml 文件
   writeFileSync(
     r("node_modules/.evd/netlify.toml"),
