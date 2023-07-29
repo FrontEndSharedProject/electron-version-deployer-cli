@@ -34,8 +34,8 @@ export enum EVDEventEnum {
 
 type EVDInitPropsType = {
   //  检测远程更新的地址
-  netlifyUrl: string;
-  remoteUrl: string;
+  netlifyUrl?: string;
+  remoteUrl?: string;
 
   //  弹窗宽度
   windowWidth?: number;
