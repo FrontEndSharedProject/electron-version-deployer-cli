@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
@@ -219,21 +220,73 @@ async function installPkg(zipFile: string) {
   mkdirSync(unzipPath);
 
   //  下载文件
-  const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
-  await new Promise<void>((res, rej) =>
-    get(`${remoteUrl}/${zipFile}`, (response) => {
-      response
-        .pipe(tmpZipFilePath)
-        .on("finish", () => {
-          res();
-        })
-        .on("error", (err: any) => {
-          rej(err);
+  await new Promise<void>(async (res, rej) => {
+    //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的额问题
+    //  原因是 cloudflare 只支持最大 25m 的文件上传
+    //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
+
+    //  判断远程分割配置文件是否存在
+    let fullCodeSplitIndexFile: false | string[] = false;
+    try {
+      const request = await fetch(
+        `${remoteUrl}/fullCodeZipSplitZips/index.json`
+      );
+      fullCodeSplitIndexFile = await request.json();
+    } catch (e) {}
+
+    //  如果满足远程分割的条件
+    if (zipFile === "fullCode.zip" && fullCodeSplitIndexFile) {
+      const mergedStream = createWriteStream(unzipPath + ".zip");
+
+      //  下载文件到
+      //  appPath/fullCode.part1.zip
+      //  appPath/fullCode.part2.zip
+      for (let fileName of fullCodeSplitIndexFile) {
+        const tmpFilePath = join(appPath, fileName);
+        const tmpSplitZip = createWriteStream(tmpFilePath);
+        await new Promise<void>((_res) => {
+          get(`${remoteUrl}/fullCodeZipSplitZips/${fileName}`, (response) => {
+            response
+              .pipe(tmpSplitZip)
+              .on("finish", () => {
+                tmpSplitZip.end(() => {
+                  //  合并文件
+                  mergedStream.write(readFileSync(tmpFilePath));
+                  _res();
+                });
+              })
+              .on("error", (err: any) => {
+                rej(err);
+              });
+          }).on("error", (err) => {
+            rej(err);
+          });
         });
-    }).on("error", (err) => {
-      rej(err);
-    })
-  );
+        //  删除临时文件
+        unlinkSync(tmpFilePath);
+      }
+
+      mergedStream.end(() => {
+        res();
+      });
+    } else {
+      const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
+      get(`${remoteUrl}/${zipFile}`, (response) => {
+        response
+          .pipe(tmpZipFilePath)
+          .on("finish", () => {
+            tmpZipFilePath.end(() => {
+              res();
+            });
+          })
+          .on("error", (err: any) => {
+            rej(err);
+          });
+      }).on("error", (err) => {
+        rej(err);
+      });
+    }
+  });
 
   //  解压
   await extract(unzipPath + ".zip", { dir: unzipPath });
