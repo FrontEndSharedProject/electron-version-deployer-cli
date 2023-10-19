@@ -3,7 +3,7 @@ import { platform } from "node:os";
 import { spawn } from "node:child_process";
 import logSymbols from "log-symbols";
 import { ProviderInterface } from "./ProviderInterface";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   statSync,
   readFileSync,
@@ -46,7 +46,7 @@ export class Cloudflare implements ProviderInterface {
     const splitZipsFileName: string[] = [];
 
     const fileBuffer = readFileSync(fullCodeZipPath);
-    const fileName = (fullCodeZipPath.split("/").pop() as string).split(".");
+    const fileName = (fullCodeZipPath.split(sep).pop() as string).split(".");
     const fileExtension = fileName.pop();
     const baseFileName = fileName.join(".");
 
