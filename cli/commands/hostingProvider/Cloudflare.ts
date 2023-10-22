@@ -84,6 +84,8 @@ export class Cloudflare implements ProviderInterface {
         "deploy",
         props.folder,
         "--project-name", cloudflareConfig.projectName,
+        "--branch",
+        "main"
       ],{
         stdio: ["pipe", "inherit", "inherit"],
         env:{

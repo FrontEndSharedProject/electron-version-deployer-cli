@@ -1,7 +1,7 @@
 {
   "name": "electron-version-deployer-cli",
   "private": false,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "types": "./dist/index.d.ts",
   "main": "./dist/index.cjs.js",
   "module": "./dist/index.es.js",
