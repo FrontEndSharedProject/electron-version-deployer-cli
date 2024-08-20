@@ -25,15 +25,16 @@ export class Netlify implements ProviderInterface {
       const cmd = platform() === "win32" ? "netlify.cmd" : "netlify";
       // prettier-ignore
       const output = spawn(cmd, [
-      "deploy",
-      "--dir", props.folder,
-      "--site", netlifyConfig.siteID,
-      "--auth", netlifyConfig.token,
-      "--prod",
-      "--debug",
-    ],{
-      stdio: ["pipe", "inherit", "inherit"]
-    });
+        "deploy",
+        "--dir", props.folder,
+        "--site", netlifyConfig.siteID,
+        "--auth", netlifyConfig.token,
+        "--prod",
+        "--debug",
+      ], {
+        stdio: ["pipe", "inherit", "inherit"],
+        shell: true,
+      });
 
       output.on("exit", function (code) {
         if (code === 0) {

@@ -11,6 +11,7 @@ import {
   unlinkSync,
   existsSync,
   mkdirSync,
+  rmSync
 } from "node:fs";
 
 export class Cloudflare implements ProviderInterface {
@@ -36,7 +37,16 @@ export class Cloudflare implements ProviderInterface {
     const fileSizeInMB = fileSize / (1024 * 1024);
     const outputFolder = join(folderPath, "fullCodeZipSplitZips");
 
-    !existsSync(outputFolder) && mkdirSync(outputFolder);
+    //  先清空该文件夹
+    //  不然之前的文件夹还存在，再次部署时会出现更新旧文件夹问题
+    if(existsSync(outputFolder)){
+      rmSync(outputFolder, {
+        force: true,
+        maxRetries: 3,
+        recursive: true,
+      });
+    }
+    mkdirSync(outputFolder)
 
     if (fileSizeInMB < 24) return;
 
@@ -88,6 +98,7 @@ export class Cloudflare implements ProviderInterface {
         "main"
       ],{
         stdio: ["pipe", "inherit", "inherit"],
+        shell: true,
         env:{
           ...process.env,
           "CLOUDFLARE_API_TOKEN":cloudflareConfig.token

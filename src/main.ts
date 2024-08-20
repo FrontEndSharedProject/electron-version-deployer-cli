@@ -229,7 +229,7 @@ async function installPkg(zipFile: string) {
     let fullCodeSplitIndexFile: false | string[] = false;
     try {
       const request = await fetch(
-        `${remoteUrl}/fullCodeZipSplitZips/index.json`
+        `${remoteUrl}/fullCodeZipSplitZips/index.json?hash=${Math.random()}`
       );
       fullCodeSplitIndexFile = await request.json();
     } catch (e) {}
@@ -245,7 +245,7 @@ async function installPkg(zipFile: string) {
         const tmpFilePath = join(appPath, fileName);
         const tmpSplitZip = createWriteStream(tmpFilePath);
         await new Promise<void>((_res) => {
-          get(`${remoteUrl}/fullCodeZipSplitZips/${fileName}`, (response) => {
+          get(`${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`, (response) => {
             response
               .pipe(tmpSplitZip)
               .on("finish", () => {
@@ -271,7 +271,7 @@ async function installPkg(zipFile: string) {
       });
     } else {
       const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
-      get(`${remoteUrl}/${zipFile}`, (response) => {
+      get(`${remoteUrl}/${zipFile}?hash=${Math.random()}`, (response) => {
         response
           .pipe(tmpZipFilePath)
           .on("finish", () => {
