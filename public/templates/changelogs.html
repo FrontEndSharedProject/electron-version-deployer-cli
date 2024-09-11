@@ -10,7 +10,10 @@
     <title>Changelogs</title>
   </head>
   <body>
-    <div id="container"></div>
+    <div
+      id="container"
+      style="margin: 0 auto; max-width: 960px; padding-top: 24px"
+    ></div>
   </body>
 
   <script>
@@ -19,7 +22,7 @@
     let html = ``;
     for (const change of changelogs) {
       html += `<div class="item">`;
-      html += `<div class="title">${change.title}</div>`;
+      html += `<div class="title" style="font-weight: bold;font-size: 20px;margin-top: 8px">${change.title}</div>`;
       html += `<div class="changes">${change.changes}</div>`;
       html += `</div>`;
     }

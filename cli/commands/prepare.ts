@@ -158,7 +158,7 @@ async function genChangelog(configs: EVDConfigType) {
       headerIds: false,
     })
   );
-  const allChanges = changes.map((change) => {
+  const allChanges = changes.versions.map((change) => {
     const { date, version, title, body } = change;
     return {
       date,
@@ -187,7 +187,7 @@ async function genChangelog(configs: EVDConfigType) {
 
   //  写入 changelogs.html, 供用户查看
   const changelogTemplate = readFileSync(
-    r("public/templates/changelogs.html"),
+    join(resolve(__dirname), "templates", "changelogs.html"),
     "utf-8"
   );
   writeFileSync(
