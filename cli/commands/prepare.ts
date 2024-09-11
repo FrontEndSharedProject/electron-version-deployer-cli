@@ -158,6 +158,20 @@ async function genChangelog(configs: EVDConfigType) {
       headerIds: false,
     })
   );
+  const allChanges = changes.map((change) => {
+    const { date, version, title, body } = change;
+    return {
+      date,
+      version,
+      title,
+      changes: purify.sanitize(
+        marked.parse(body, {
+          mangle: false,
+          headerIds: false,
+        })
+      ),
+    };
+  });
 
   //  写入到 .evd/changelog.json 中
   writeFileSync(
@@ -168,6 +182,17 @@ async function genChangelog(configs: EVDConfigType) {
       date,
       changes: html,
     }),
+    "utf-8"
+  );
+
+  //  写入 changelogs.html, 供用户查看
+  const changelogTemplate = readFileSync(
+    r("public/templates/changelogs.html"),
+    "utf-8"
+  );
+  writeFileSync(
+    r("node_modules/.evd/changelogs.html"),
+    changelogTemplate.replace("__INJECT__", JSON.stringify(allChanges)),
     "utf-8"
   );
 

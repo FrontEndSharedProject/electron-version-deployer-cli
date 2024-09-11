@@ -119,6 +119,12 @@
     <div class="title-bar">
       <img src="" width="34" class="logo" style="display: none" />
       <span>有可用的新版本：</span>
+      <a
+        href="#"
+        class="see-all-changes"
+        style="text-decoration: underline; font-size: 12px"
+        >（所有版本更新记录）</a
+      >
     </div>
     <div class="content">具体更新内容请查看 Changelogs</div>
     <div class="buttons-box">
@@ -143,6 +149,15 @@
           const imgRef = document.querySelector(".logo");
           imgRef.src = link;
           imgRef.style.display = "inline-block";
+        }
+      });
+
+      ipcRenderer.invoke("evd-get-changelogs-link").then((link) => {
+        const aTag = document.querySelector(".see-all-changes");
+        if (link) {
+          aTag.href = link;
+        } else {
+          aTag.remove();
         }
       });
 

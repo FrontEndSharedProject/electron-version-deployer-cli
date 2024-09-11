@@ -30,6 +30,7 @@ export enum EVDEventEnum {
   SKIP = "evd-skip",
   GET_CHANGELOGS = "evd-get-change-logs",
   GET_LOGO = "evd-get-logo",
+  GET_CHANGELOGS_LINK = "evd-get-changelogs-link",
 }
 
 type EVDInitPropsType = {
@@ -245,20 +246,23 @@ async function installPkg(zipFile: string) {
         const tmpFilePath = join(appPath, fileName);
         const tmpSplitZip = createWriteStream(tmpFilePath);
         await new Promise<void>((_res) => {
-          get(`${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`, (response) => {
-            response
-              .pipe(tmpSplitZip)
-              .on("finish", () => {
-                tmpSplitZip.end(() => {
-                  //  合并文件
-                  mergedStream.write(readFileSync(tmpFilePath));
-                  _res();
+          get(
+            `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`,
+            (response) => {
+              response
+                .pipe(tmpSplitZip)
+                .on("finish", () => {
+                  tmpSplitZip.end(() => {
+                    //  合并文件
+                    mergedStream.write(readFileSync(tmpFilePath));
+                    _res();
+                  });
+                })
+                .on("error", (err: any) => {
+                  rej(err);
                 });
-              })
-              .on("error", (err: any) => {
-                rej(err);
-              });
-          }).on("error", (err) => {
+            }
+          ).on("error", (err) => {
             rej(err);
           });
         });
@@ -368,6 +372,12 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
       ? cacheChangelogs
       : await fetchRemoteChangelogJSON(remoteUrl);
   });
+
+  ipcMain.handle(EVDEventEnum.GET_CHANGELOGS_LINK, async () => {
+    const { remoteUrl } = getConfigs();
+
+    return `${remoteUrl}/changelogs.html`;
+  });
 }
 
 function cleanup(promptWindow: BrowserWindow) {
@@ -376,6 +386,7 @@ function cleanup(promptWindow: BrowserWindow) {
   ipcMain.removeAllListeners(EVDEventEnum.UPDATE);
   ipcMain.removeHandler(EVDEventEnum.GET_CHANGELOGS);
   ipcMain.removeHandler(EVDEventEnum.GET_LOGO);
+  ipcMain.removeHandler(EVDEventEnum.GET_CHANGELOGS_LINK);
 
   try {
     promptWindow?.focus();
