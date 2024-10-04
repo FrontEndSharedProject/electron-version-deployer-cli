@@ -12,7 +12,6 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
@@ -21,6 +20,7 @@ import extract from "extract-zip";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
 import { platform } from "node:process";
+import {forceDeleteSync} from "@/utils/utils";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -267,7 +267,7 @@ async function installPkg(zipFile: string) {
           });
         });
         //  删除临时文件
-        unlinkSync(tmpFilePath);
+        forceDeleteSync(tmpFilePath);
       }
 
       mergedStream.end(() => {

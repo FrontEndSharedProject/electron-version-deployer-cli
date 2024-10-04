@@ -8,11 +8,11 @@ import {
   statSync,
   readFileSync,
   writeFileSync,
-  unlinkSync,
   existsSync,
   mkdirSync,
-  rmSync
+  rmSync,
 } from "node:fs";
+import { forceDeleteSync } from "@/utils/utils";
 
 export class Cloudflare implements ProviderInterface {
   private static _instance: Cloudflare;
@@ -39,14 +39,14 @@ export class Cloudflare implements ProviderInterface {
 
     //  先清空该文件夹
     //  不然之前的文件夹还存在，再次部署时会出现更新旧文件夹问题
-    if(existsSync(outputFolder)){
+    if (existsSync(outputFolder)) {
       rmSync(outputFolder, {
         force: true,
         maxRetries: 3,
         recursive: true,
       });
     }
-    mkdirSync(outputFolder)
+    mkdirSync(outputFolder);
 
     if (fileSizeInMB < 24) return;
 
@@ -76,7 +76,7 @@ export class Cloudflare implements ProviderInterface {
     );
 
     //  删除源文件
-    unlinkSync(join(folderPath, "fullCode.zip"));
+    forceDeleteSync(join(folderPath, "fullCode.zip"));
   }
 
   deploy(props: { folder: string; configs: EVDConfigType }): Promise<void> {
