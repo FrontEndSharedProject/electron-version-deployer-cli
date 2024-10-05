@@ -10,8 +10,7 @@ const {
   writeFileSync,
   readFileSync,
 } = require("fs");
-const { join, resolve, basename } = require("path");
-const { dirname } = require("node:path");
+const { join, resolve, basename, sep, dirname, isAbsolute } = require("path");
 
 try {
   copyFolderRecursiveSync("__unzipPath__", "__appPath__");
@@ -36,7 +35,7 @@ try {
 function copyFolderRecursiveSync(source, target) {
   // 如果目标目录不存在，则创建目标目录
   if (!existsSync(target)) {
-    mkdirSync(target);
+    mkdirRecursiveSync(target);
   }
 
   // 获取源目录的文件列表
@@ -100,9 +99,14 @@ function replaceChangedModuleSync(
 
     // 如果当前文件是文件夹，则判断是否要更新
     if (statSync(sourcePath).isDirectory()) {
-      //  如果不存在，或者版本不一样则进行替换
-      if (shouldReplaceModule(sourcePath, targetPath)) {
-        copyFolderRecursiveSync(sourcePath, targetPath);
+      //  如果是组织文件夹比如
+      if (folderOrFileName.startsWith("@")) {
+        replaceChangedModuleSync(sourcePath, targetPath);
+      } else {
+        //  如果不存在，或者版本不一样则进行替换
+        if (shouldReplaceModule(sourcePath, targetPath)) {
+          copyFolderRecursiveSync(sourcePath, targetPath);
+        }
       }
     } else {
       copyFileSync(sourcePath, targetPath);
@@ -116,7 +120,7 @@ function shouldReplaceModule(sourcePath, destPath) {
   return sourceVersion !== destVersion;
 }
 
-async function getPackageVersion(packagePath) {
+function getPackageVersion(packagePath) {
   try {
     const packageJsonPath = join(packagePath, "package.json");
     const packageJsonContent = readFileSync(packageJsonPath, "utf-8");
@@ -126,4 +130,18 @@ async function getPackageVersion(packagePath) {
     console.error(`Error reading package.json in ${packagePath}:`, error);
     return null;
   }
+}
+
+function mkdirRecursiveSync(targetPath) {
+  // 将路径分割成数组
+  const initDir = isAbsolute(targetPath) ? sep : "";
+  const parts = targetPath.split(sep);
+
+  parts.forEach((part, index) => {
+    if (!part && index === 0) return; // 如果是绝对路径，跳过第一个空字符串
+    const currentPath = join(initDir, ...parts.slice(0, index + 1));
+    if (!existsSync(currentPath)) {
+      mkdirSync(currentPath);
+    }
+  });
 }
