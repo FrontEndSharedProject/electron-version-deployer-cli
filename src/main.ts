@@ -20,7 +20,7 @@ import extract from "extract-zip";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
 import { platform } from "node:process";
-import {forceDeleteSync} from "@/utils/utils";
+import { forceDeleteSync } from "@/utils/utils";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -69,6 +69,11 @@ export function EVDInit(props: EVDInitPropsType) {
 
   globalArgs = props;
   const { detectionFrequency, detectAtStart, onError } = getConfigs();
+  //  获取当前程序执行的 JSON 文件
+  const appPath = app.getAppPath();
+  cacheCurrentPkgJSON = JSON.parse(
+    readFileSync(join(appPath, "package.json"), "utf-8")
+  );
 
   setInterval(async () => {
     try {
@@ -86,12 +91,6 @@ export function EVDInit(props: EVDInitPropsType) {
       onError(e);
     }
   }, 1000 * 2);
-
-  //  获取当前程序执行的 JSON 文件
-  const appPath = app.getAppPath();
-  cacheCurrentPkgJSON = JSON.parse(
-    readFileSync(join(appPath, "package.json"), "utf-8")
-  );
 }
 
 export async function EVDCheckUpdate() {

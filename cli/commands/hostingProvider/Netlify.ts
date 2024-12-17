@@ -24,9 +24,11 @@ export class Netlify implements ProviderInterface {
     return new Promise<void>((res) => {
       const cmd = platform() === "win32" ? "netlify.cmd" : "netlify";
       // prettier-ignore
+      //  如果路径包含空格，需要用引号包裹
+      const folderPath = props.folder.includes(" ") ? `"${props.folder}"` : props.folder;
       const output = spawn(cmd, [
         "deploy",
-        "--dir", props.folder,
+        "--dir", folderPath,
         "--site", netlifyConfig.siteID,
         "--auth", netlifyConfig.token,
         "--prod",
