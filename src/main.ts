@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, app, shell, utilityProcess } from "electron";
+import { BrowserWindow, ipcMain, app, shell, utilityProcess, net } from "electron";
 import { format } from "node:url";
 import { join, sep } from "node:path";
 import {
@@ -15,12 +15,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
-import { get } from "node:https";
-import extract from "extract-zip";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
 import { platform } from "node:process";
 import { forceDeleteSync } from "@/utils/utils";
+import extract from "extract-zip";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -244,27 +243,33 @@ async function installPkg(zipFile: string) {
       for (let fileName of fullCodeSplitIndexFile) {
         const tmpFilePath = join(appPath, fileName);
         const tmpSplitZip = createWriteStream(tmpFilePath);
-        await new Promise<void>((_res) => {
-          get(
-            `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`,
-            (response) => {
-              response
-                .pipe(tmpSplitZip)
-                .on("finish", () => {
-                  tmpSplitZip.end(() => {
-                    //  合并文件
-                    mergedStream.write(readFileSync(tmpFilePath));
-                    _res();
-                  });
-                })
-                .on("error", (err: any) => {
-                  rej(err);
-                });
-            }
-          ).on("error", (err) => {
-            rej(err);
+        
+        await new Promise<void>((_res, _rej) => {
+          const request = net.request({
+            url: `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`
           });
+
+          request.on('response', (response) => {
+            response.on('data', (chunk) => {
+              tmpSplitZip.write(chunk);
+            });
+
+            response.on('end', () => {
+              tmpSplitZip.end(() => {
+                //  合并文件
+                mergedStream.write(readFileSync(tmpFilePath));
+                _res();
+              });
+            });
+          });
+
+          request.on('error', (error) => {
+            _rej(error);
+          });
+
+          request.end();
         });
+        
         //  删除临时文件
         forceDeleteSync(tmpFilePath);
       }
@@ -274,20 +279,28 @@ async function installPkg(zipFile: string) {
       });
     } else {
       const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
-      get(`${remoteUrl}/${zipFile}?hash=${Math.random()}`, (response) => {
-        response
-          .pipe(tmpZipFilePath)
-          .on("finish", () => {
-            tmpZipFilePath.end(() => {
-              res();
-            });
-          })
-          .on("error", (err: any) => {
-            rej(err);
-          });
-      }).on("error", (err) => {
-        rej(err);
+      
+      const request = net.request({
+        url: `${remoteUrl}/${zipFile}?hash=${Math.random()}`
       });
+
+      request.on('response', (response) => {
+        response.on('data', (chunk) => {
+          tmpZipFilePath.write(chunk);
+        });
+
+        response.on('end', () => {
+          tmpZipFilePath.end(() => {
+            res();
+          });
+        });
+      });
+
+      request.on('error', (error) => {
+        rej(error);
+      });
+
+      request.end();
     }
   });
 
