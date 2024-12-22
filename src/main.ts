@@ -20,6 +20,7 @@ import installerCodeStr from "./installer?raw";
 import { platform } from "node:process";
 import { forceDeleteSync } from "@/utils/utils";
 import extract from "extract-zip";
+import { netRequest } from "@/helpers/netRequest";
 
 const id = `${Date.now()}-${Math.random()}`;
 
@@ -220,17 +221,13 @@ async function installPkg(zipFile: string) {
 
   //  下载文件
   await new Promise<void>(async (res, rej) => {
-    //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的额问题
-    //  原因是 cloudflare 只支持最大 25m 的文件上传
-    //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
-
     //  判断远程分割配置文件是否存在
     let fullCodeSplitIndexFile: false | string[] = false;
     try {
-      const request = await fetch(
-        `${remoteUrl}/fullCodeZipSplitZips/index.json?hash=${Math.random()}`
-      );
-      fullCodeSplitIndexFile = await request.json();
+      fullCodeSplitIndexFile = await netRequest({
+        url: `${remoteUrl}/fullCodeZipSplitZips/index.json?hash=${Math.random()}`,
+        responseType: 'json'
+      });
     } catch (e) {}
 
     //  如果满足远程分割的条件
@@ -244,30 +241,25 @@ async function installPkg(zipFile: string) {
         const tmpFilePath = join(appPath, fileName);
         const tmpSplitZip = createWriteStream(tmpFilePath);
         
-        await new Promise<void>((_res, _rej) => {
-          const request = net.request({
-            url: `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`
+        const response = await netRequest({
+          url: `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`,
+          responseType: 'stream'
+        });
+        
+        await new Promise<void>((streamRes, streamRej) => {
+          response.on('data', (chunk) => {
+            tmpSplitZip.write(chunk);
           });
 
-          request.on('response', (response) => {
-            response.on('data', (chunk) => {
-              tmpSplitZip.write(chunk);
+          response.on('end', () => {
+            tmpSplitZip.end(() => {
+              //  合并文件
+              mergedStream.write(readFileSync(tmpFilePath));
+              streamRes();
             });
-
-            response.on('end', () => {
-              tmpSplitZip.end(() => {
-                //  合并文件
-                mergedStream.write(readFileSync(tmpFilePath));
-                _res();
-              });
-            });
           });
 
-          request.on('error', (error) => {
-            _rej(error);
-          });
-
-          request.end();
+          response.on('error', streamRej);
         });
         
         //  删除临时文件
@@ -280,27 +272,26 @@ async function installPkg(zipFile: string) {
     } else {
       const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
       
-      const request = net.request({
-        url: `${remoteUrl}/${zipFile}?hash=${Math.random()}`
+      const response = await netRequest({
+        url: `${remoteUrl}/${zipFile}?hash=${Math.random()}`,
+        responseType: 'stream'
       });
 
-      request.on('response', (response) => {
+      await new Promise<void>((streamRes, streamRej) => {
         response.on('data', (chunk) => {
           tmpZipFilePath.write(chunk);
         });
 
         response.on('end', () => {
           tmpZipFilePath.end(() => {
-            res();
+            streamRes();
           });
         });
+
+        response.on('error', streamRej);
       });
 
-      request.on('error', (error) => {
-        rej(error);
-      });
-
-      request.end();
+      res();
     }
   });
 
