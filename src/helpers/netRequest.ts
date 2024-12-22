@@ -6,6 +6,24 @@ interface RequestOptions {
 }
 
 export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
+  // 如果 net 不存在，使用 fetch
+  if (!net) {
+    const response = await fetch(options.url);
+    
+    if (options.responseType === 'json') {
+      try {
+        return await response.json();
+      } catch (e) {
+        return null as T;
+      }
+    } else if (options.responseType === 'stream') {
+      return response.body as T;
+    } else {
+      return await response.text() as T;
+    }
+  }
+
+  // 使用 net.request
   return new Promise((resolve, reject) => {
     const request = net.request(options.url);
     let data = '';
