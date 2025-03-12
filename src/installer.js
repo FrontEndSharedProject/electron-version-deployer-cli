@@ -133,15 +133,5 @@ function getPackageVersion(packagePath) {
 }
 
 function mkdirRecursiveSync(targetPath) {
-  // 将路径分割成数组
-  const initDir = isAbsolute(targetPath) ? sep : "";
-  const parts = targetPath.split(sep);
-
-  parts.forEach((part, index) => {
-    if (!part && index === 0) return; // 如果是绝对路径，跳过第一个空字符串
-    const currentPath = join(initDir, ...parts.slice(0, index + 1));
-    if (!existsSync(currentPath)) {
-      mkdirSync(currentPath);
-    }
-  });
+  mkdirSync(targetPath, { recursive: true });
 }
