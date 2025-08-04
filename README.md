@@ -150,6 +150,13 @@ export type EVDConfigType = {
     //  package.json 文件路径（相对 folder）
     packageJSON: string;
   };
+  //  额外需要打包的文件夹
+  //  这将会在部署时将文件夹里面的内容，一同部署到服务器上
+  //  文件会被放在根目录的 basename 文件中，比如
+  // 传入 ['/user/myname/Desktop/test'] 这样一个文件夹，那么最终会被放到根目录的
+  // /test 中
+  // 注意当个文件不能超过 25mb 这是 cloudflare 的限制
+  extraFolders: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
   netlify?: {
     //  网站域名如 https://site.netlify.app

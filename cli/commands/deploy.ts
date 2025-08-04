@@ -3,12 +3,13 @@ import { getConfigs } from "../helpers/getConfigs";
 import logSymbols from "log-symbols";
 import { EVDConfigType } from "@/types/EVDConfigType";
 import { confirm } from "@inquirer/prompts";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, cpSync } from "node:fs";
 import { r } from "../utils";
 import { fetchRemotePkgJSON } from "@/helpers/fetchRemotePkgJSON";
 import { versionToNum } from "@/utils/versionToNum";
 import { Netlify } from "./hostingProvider/Netlify";
 import { Cloudflare } from "./hostingProvider/Cloudflare";
+import { basename } from "node:path";
 
 program
   .command("deploy")
@@ -21,11 +22,46 @@ program
       await validateConfigs(configs);
       await checkIsFirstTimeDeploy(configs);
       await validateRemotePackageJSON(configs);
+      await deployExtraFolders(configs);
       await deploy(configs);
     } catch (e: any) {
       console.log(logSymbols.error, e.toString());
     }
   });
+
+async function deployExtraFolders(configs: EVDConfigType) {
+  const extraFolders = configs.extraFolders;
+  let folders: string[] = [];
+  if (typeof extraFolders === "function") {
+    folders = await extraFolders();
+  } else {
+    folders = extraFolders;
+  }
+
+  for (const folder of folders) {
+    //  判断文件是否存在
+    if (!existsSync(folder)) {
+      throw new Error(`未找到文件夹 ${folder}`);
+    }
+
+    // 判断文件是否为文件夹
+    const stat = statSync(folder);
+    if (!stat.isDirectory()) {
+      throw new Error(`${folder} 不是一个文件夹`);
+    }
+
+    // 如果 folder 存在先删除
+    const destFolder = r(`node_modules/.evd/${basename(folder)}`);
+    if (existsSync(destFolder)) {
+      rmSync(destFolder, { recursive: true });
+    }
+
+    // 复制文件
+    cpSync(folder, r(`node_modules/.evd/${basename(folder)}`), {
+      recursive: true,
+    });
+  }
+}
 
 async function deploy(configs: EVDConfigType) {
   console.log(logSymbols.info, "开始部署", r());
