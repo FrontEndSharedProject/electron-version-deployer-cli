@@ -31,6 +31,8 @@ program
 
 async function deployExtraFolders(configs: EVDConfigType) {
   const extraFolders = configs.extraFolders;
+  if (!extraFolders) return;
+
   let folders: string[] = [];
   if (typeof extraFolders === "function") {
     folders = await extraFolders();

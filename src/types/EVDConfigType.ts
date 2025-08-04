@@ -41,7 +41,7 @@ export type EVDConfigType = {
   // 传入 ['/user/myname/Desktop/test'] 这样一个文件夹，那么最终会被放到根目录的
   // /test 中
   // 注意当个文件不能超过 25mb 这是 cloudflare 的限制
-  extraFolders: string[] | (() => Promise<string[]>) | (() => string[]);
+  extraFolders?: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
   netlify?: {
     //  网站域名如 https://site.netlify.app
