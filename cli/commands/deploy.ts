@@ -42,12 +42,12 @@ async function deployExtraFolders(configs: EVDConfigType) {
 
   for (const folder of folders) {
     //  判断文件是否存在
-    if (!existsSync(folder)) {
+    if (!existsSync(r(folder))) {
       throw new Error(`未找到文件夹 ${folder}`);
     }
 
     // 判断文件是否为文件夹
-    const stat = statSync(folder);
+    const stat = statSync(r(folder));
     if (!stat.isDirectory()) {
       throw new Error(`${folder} 不是一个文件夹`);
     }
@@ -59,7 +59,7 @@ async function deployExtraFolders(configs: EVDConfigType) {
     }
 
     // 复制文件
-    cpSync(folder, r(`node_modules/.evd/${basename(folder)}`), {
+    cpSync(r(folder), r(`node_modules/.evd/${basename(folder)}`), {
       recursive: true,
     });
   }

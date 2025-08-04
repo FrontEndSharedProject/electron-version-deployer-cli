@@ -38,9 +38,10 @@ export type EVDConfigType = {
   //  额外需要打包的文件夹
   //  这将会在部署时将文件夹里面的内容，一同部署到服务器上
   //  文件会被放在根目录的 basename 文件中，比如
-  // 传入 ['/user/myname/Desktop/test'] 这样一个文件夹，那么最终会被放到根目录的
+  // 传入 ['public/test'] 这样一个文件夹，那么最终会被放到根目录的
   // /test 中
-  // 注意当个文件不能超过 25mb 这是 cloudflare 的限制
+  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制
+  // 注意：必须使用相对路径，相对路径谁相对于 evd.config.ts 文件
   extraFolders?: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
   netlify?: {
