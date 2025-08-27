@@ -17,6 +17,7 @@ import { marked } from "marked";
 import { JSDOM } from "jsdom";
 import DOMPurify from "dompurify";
 import { archiveFiles } from "../helpers/archiveFiles";
+import { normalizeToOSEOL } from "../helpers/docsHelper";
 
 program
   .command("prepare")
@@ -128,8 +129,14 @@ async function genChangelog(configs: EVDConfigType) {
 
   //  解析 changelogs
   //  https://www.npmjs.com/package/changelog-parser
+  const changelogText = readFileSync(r(configs.changelogsPath), "utf-8");
   const changes = await parseChangelog({
-    filePath: r(configs.changelogsPath),
+    //  将 changelog 文件转换为 os.EOL
+    //  https://github.com/ungoldman/changelog-parser/issues/34
+    text: normalizeToOSEOL(changelogText, {
+      stripBOM: true,
+      ensureFinalNewline: true,
+    }).text,
     removeMarkdown: false,
   });
 
