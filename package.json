@@ -1,7 +1,7 @@
 {
   "name": "electron-version-deployer-cli",
   "private": false,
-  "version": "0.4.5",
+  "version": "0.4.6",
   "types": "./dist/index.d.ts",
   "main": "./dist/index.cjs.js",
   "module": "./dist/index.es.js",
@@ -19,7 +19,7 @@
   ],
   "devDependencies": {
     "@inquirer/prompts": "^1.2.3",
-    "@types/archiver": "^5.3.2",
+    "@types/archiver": "^7.0.0",
     "@types/node": "^20.2.5",
     "changelog-parser": "^3.0.1",
     "commander": "^10.0.1",
@@ -38,7 +38,7 @@
     "electron": "^25.3.2"
   },
   "dependencies": {
-    "archiver": "^5.3.1",
+    "archiver": "^7.0.1",
     "extract-zip": "^2.0.1",
     "pkg-up": "3.1.0"
   },
