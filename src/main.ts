@@ -250,6 +250,8 @@ async function installPkg(zipFile: string) {
             url: `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`,
             method: 'GET'
           });
+          request.setHeader("Accept-Encoding", "identity");
+          request.setHeader("Cache-Control", "no-cache");
 
           request.on('response', (response) => {
             //   @ts-ignore
@@ -287,8 +289,10 @@ async function installPkg(zipFile: string) {
       const request = net.request({
         url: `${remoteUrl}/${zipFile}?hash=${Math.random()}`,
         method: 'GET',
-
       });
+
+      request.setHeader("Accept-Encoding", "identity");
+      request.setHeader("Cache-Control", "no-cache");
 
       request.on('response', (response) => {
         //   @ts-ignore

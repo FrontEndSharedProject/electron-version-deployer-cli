@@ -2,7 +2,7 @@ import { net } from "electron";
 
 interface RequestOptions {
   url: string;
-  responseType?: 'json' | 'stream' | 'text';
+  responseType?: "json" | "stream" | "text";
 }
 
 const TIMEOUT_MS = 5000; // 5秒超时
@@ -20,22 +20,22 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
         signal: abortController.signal,
       });
       clearTimeout(timeoutId);
-      
-      if (options.responseType === 'json') {
+
+      if (options.responseType === "json") {
         try {
           return await response.json();
         } catch (e) {
           return null as T;
         }
-      } else if (options.responseType === 'stream') {
+      } else if (options.responseType === "stream") {
         return response.body as T;
       } else {
-        return await response.text() as T;
+        return (await response.text()) as T;
       }
     } catch (error: any) {
       clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
-        throw new Error('网络请求超时，请检查网络连接或使用 VPN 后重试');
+      if (error.name === "AbortError") {
+        throw new Error("网络请求超时，请检查网络连接或使用 VPN 后重试");
       }
       throw error;
     }
@@ -44,7 +44,9 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
   // 使用 net.request
   return new Promise((resolve, reject) => {
     const request = net.request(options.url);
-    let data = '';
+    request.setHeader("Accept-Encoding", "identity");
+    request.setHeader("Cache-Control", "no-cache");
+    let data = "";
     let isResolved = false;
 
     // 设置超时
@@ -52,7 +54,7 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
       if (!isResolved) {
         isResolved = true;
         request.abort();
-        reject(new Error('网络请求超时，请检查网络连接或使用 VPN 后重试'));
+        reject(new Error("网络请求超时，请检查网络连接或使用 VPN 后重试"));
       }
     }, TIMEOUT_MS);
 
@@ -60,9 +62,9 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
       clearTimeout(timeoutId);
     };
 
-    request.on('response', (response) => {
-      response.on('data', (chunk) => {
-        if (options.responseType === 'stream') {
+    request.on("response", (response) => {
+      response.on("data", (chunk) => {
+        if (options.responseType === "stream") {
           if (!isResolved) {
             isResolved = true;
             cleanup();
@@ -73,14 +75,14 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
         data += chunk;
       });
 
-      response.on('end', () => {
+      response.on("end", () => {
         if (isResolved) return;
         isResolved = true;
         cleanup();
-        
-        if (options.responseType === 'stream') return;
-        
-        if (options.responseType === 'json') {
+
+        if (options.responseType === "stream") return;
+
+        if (options.responseType === "json") {
           try {
             resolve(JSON.parse(data));
           } catch (e) {
@@ -92,7 +94,7 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
       });
     });
 
-    request.on('error', (error) => {
+    request.on("error", (error) => {
       if (!isResolved) {
         isResolved = true;
         cleanup();
@@ -102,4 +104,4 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
 
     request.end();
   });
-} 
+}
