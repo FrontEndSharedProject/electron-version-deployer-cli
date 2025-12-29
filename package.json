@@ -5,6 +5,7 @@
   "types": "./dist/index.d.ts",
   "main": "./dist/index.cjs.js",
   "module": "./dist/index.es.js",
+  "url": "https://github.com/FrontEndSharedProject/electron-version-deployer-cli",
   "scripts": {
     "serve": "esno ./watch.ts",
     "build": "MODE=production esno ./watch.ts && tsc -p ./tsconfig.dist.json -emitDeclarationOnly && tsc-alias -p ./tsconfig.dist.json",
