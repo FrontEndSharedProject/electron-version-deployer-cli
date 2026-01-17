@@ -49,13 +49,17 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
     let data = "";
     let isResolved = false;
 
+    const failOnce = (error: unknown) => {
+      if (isResolved) return;
+      isResolved = true;
+      cleanup();
+      reject(error);
+    };
+
     // 设置超时
     const timeoutId = setTimeout(() => {
-      if (!isResolved) {
-        isResolved = true;
-        request.abort();
-        reject(new Error("网络请求超时，请检查网络连接或使用 VPN 后重试"));
-      }
+      request.abort();
+      failOnce(new Error("网络请求超时，请检查网络连接或使用 VPN 后重试"));
     }, TIMEOUT_MS);
 
     const cleanup = () => {
@@ -63,16 +67,30 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
     };
 
     request.on("response", (response) => {
+      const statusCode = response.statusCode ?? 0;
+      if (statusCode < 200 || statusCode >= 300) {
+        failOnce(
+          new Error(
+            `请求失败，状态码: ${statusCode} ${response.statusMessage ?? ""}`.trim()
+          )
+        );
+        return;
+      }
+
       response.on("data", (chunk) => {
-        if (options.responseType === "stream") {
-          if (!isResolved) {
-            isResolved = true;
-            cleanup();
-            resolve(response as any);
+        try {
+          if (options.responseType === "stream") {
+            if (!isResolved) {
+              isResolved = true;
+              cleanup();
+              resolve(response as any);
+            }
+            return;
           }
-          return;
+          data += chunk;
+        } catch (error) {
+          failOnce(error);
         }
-        data += chunk;
       });
 
       response.on("end", () => {
@@ -82,24 +100,28 @@ export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
 
         if (options.responseType === "stream") return;
 
-        if (options.responseType === "json") {
-          try {
-            resolve(JSON.parse(data));
-          } catch (e) {
-            resolve(null as T);
+        try {
+          if (options.responseType === "json") {
+            try {
+              resolve(JSON.parse(data));
+            } catch (e) {
+              resolve(null as T);
+            }
+          } else {
+            resolve(data as T);
           }
-        } else {
-          resolve(data as T);
+        } catch (error) {
+          failOnce(error);
         }
+      });
+
+      response.on("error", (error) => {
+        failOnce(error);
       });
     });
 
     request.on("error", (error) => {
-      if (!isResolved) {
-        isResolved = true;
-        cleanup();
-        reject(error);
-      }
+      failOnce(error);
     });
 
     request.end();
