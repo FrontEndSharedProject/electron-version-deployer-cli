@@ -49,13 +49,12 @@ export async function bundleConfigFileAndRead(
         },
       },
     }).then((data) => {
-      const script = new vm.Script(data[0].output[0].code);
-      const ctx = {
-        require: require,
-        module: module,
-      };
-      script.runInNewContext(ctx);
-      resolve(ctx.module.exports);
+      const m = { exports: {} as any };
+      const wrapper = `(function(require, module, exports) { ${data[0].output[0].code}\n})`;
+      const script = new vm.Script(wrapper);
+      const fn = script.runInThisContext();
+      fn(require, m, m.exports);
+      resolve(m.exports.default || m.exports);
     });
   });
 }
