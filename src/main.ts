@@ -17,6 +17,7 @@ import {
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
 import { CLI_NAME } from "@/const";
 import installerCodeStr from "./installer?raw";
+import templateHtmlStr from "../public/templates/newVersionDialog.html?raw";
 import { platform } from "node:process";
 import { forceDeleteSync } from "@/utils/utils";
 import extract from "extract-zip";
@@ -140,17 +141,28 @@ async function showNewVersionDialog() {
       promptWindow.setMenu(null);
       promptWindow.setMenuBarVisibility(false);
 
+      //  解析模板路径：优先使用 node_modules 中的文件（向后兼容），不存在则使用内嵌模板
+      const appPath = app.getAppPath();
+      const nodeModulesTemplatePath = join(
+        appPath,
+        "node_modules",
+        CLI_NAME,
+        "dist",
+        "templates",
+        "newVersionDialog.html"
+      );
+      let templatePath: string;
+      if (existsSync(nodeModulesTemplatePath)) {
+        templatePath = nodeModulesTemplatePath;
+      } else {
+        templatePath = join(appPath, "_evdDialogTemplate.html");
+        writeFileSync(templatePath, templateHtmlStr as string, "utf-8");
+      }
+
       const promptUrl = format({
         protocol: "file",
         slashes: true,
-        pathname: join(
-          app.getAppPath(),
-          "node_modules",
-          CLI_NAME,
-          "dist",
-          "templates",
-          "newVersionDialog.html"
-        ),
+        pathname: templatePath,
         hash: id,
       });
 
