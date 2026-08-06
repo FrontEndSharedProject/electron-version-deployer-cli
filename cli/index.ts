@@ -1,7 +1,9 @@
 import { program } from "commander";
 import "./commands/init";
 import "./commands/prepare";
+import "./commands/preDeploy";
 import "./commands/deploy";
+import "./commands/verify";
 import "./commands/install-prebuilt";
 
 program

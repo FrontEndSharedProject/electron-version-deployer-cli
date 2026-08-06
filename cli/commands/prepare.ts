@@ -24,10 +24,10 @@ program
   .description(
     "部署前的准备工作，如获取编译软件获取逻辑代码，生成 changelog 等"
   )
-  .action(async (source, destination) => {
-    const configs = await getConfigs();
-
+  .action(async () => {
     try {
+      const configs = await getConfigs();
+
       await genTmpFolder();
       await compile(configs);
       //  生成日志需要放在编译后面，这样才能读取到准确的 pkg.version
@@ -35,9 +35,14 @@ program
       await copySourceAndZipFiles(configs);
     } catch (e: any) {
       console.log(logSymbols.error, e.toString());
+      process.exitCode = 1;
+      return;
     }
 
-    console.log(logSymbols.info, "请执行 evd deploy 命令进行部署");
+    console.log(
+      logSymbols.info,
+      "请执行 evd deploy 命令进行部署，或执行 evd preDeploy 后自行上传"
+    );
   });
 
 async function copySourceAndZipFiles(configs: EVDConfigType) {

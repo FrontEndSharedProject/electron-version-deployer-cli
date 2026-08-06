@@ -91,7 +91,7 @@ EVDInit 方法接受的参数如下
 
 ```typescript
 type EVDInitPropsType = {
-  //  检测远程更新的地址
+  //  检测远程更新的地址，支持子目录，如 https://cdn.mycorp.com/app/my-project
   remoteUrl: string;
 
   //  弹窗宽度
@@ -104,11 +104,84 @@ type EVDInitPropsType = {
   detectionFrequency?: number;
   //  是否在程序开始运行时进行检测
   detectAtStart?: boolean;
-  //  当自动更新出现错误时的回掉
+  //  检测更新的请求超时时间/ms，默认 10000
+  requestTimeout?: number;
+  //  下载更新包的停顿超时时间/ms，连续该时长没有新数据才算超时，默认 60000
+  downloadStallTimeout?: number;
+  //  当自动更新出现错误时的回掉，回调参数为 EVDError
   onError?: (err: unknown) => void;
   onBeforeNewPkgInstall?: (next: () => any) => void;
 };
 ```
+
+`remoteUrl` **支持子目录形式**（如 `https://plugin.example.com/app/simple-marker-local`），末尾带不带 `/` 都可以。
+
+## 更新错误处理
+
+`onError` 收到的是 `EVDError`，可以按 `code` 分别提示。比如远程域名需要 VPN，用户没连时会拿到 `NETWORK_TIMEOUT`：
+
+```typescript
+import {
+  EVDInit,
+  EVDErrorCodeEnum,
+  isEVDError,
+  formatEVDErrorDetail,
+} from "electron-version-deployer-cli/dist/main";
+
+EVDInit({
+  remoteUrl: import.meta.env.REMOTE_URL,
+  onError(error) {
+    if (!isEVDError(error)) return writeError(error, "evd");
+
+    switch (error.code) {
+      case EVDErrorCodeEnum.NETWORK_TIMEOUT:
+      case EVDErrorCodeEnum.NETWORK_UNREACHABLE:
+        //  连不上，多半是没连 VPN
+        showTip("无法连接更新服务器，请先连接 VPN");
+        break;
+      case EVDErrorCodeEnum.REMOTE_NOT_FOUND:
+        writeError(`${error.url} 上还没有发布过版本`, "evd");
+        break;
+      default:
+        //  可直接复制给开发者排查的完整信息
+        writeError(formatEVDErrorDetail(error), "evd");
+    }
+  },
+});
+```
+
+`EVDError` 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `code` | `EVDErrorCodeEnum`，见下表 |
+| `phase` | `check`（后台检测）/ `download`（下载更新包）/ `install`（解压安装） |
+| `url` | 出错的远程地址 |
+| `statusCode` | HTTP 状态码（有的话） |
+| `cause` | 原始错误对象 |
+
+错误码：
+
+| code | 含义 |
+| --- | --- |
+| `NETWORK_TIMEOUT` | 请求超时，常见于需要 VPN 才能访问的域名 |
+| `NETWORK_UNREACHABLE` | DNS 解析失败 / 连接被拒绝 / 断网 |
+| `SSL_ERROR` | 证书校验失败，自建服务器用自签名证书时常见 |
+| `HTTP_ERROR` | 非 2xx 响应 |
+| `REMOTE_NOT_FOUND` | 404，远程未部署过或地址填错 |
+| `REMOTE_INVALID_JSON` | 有响应但不是合法 JSON，静态服务器返回兜底页时常见 |
+| `DOWNLOAD_TIMEOUT` | 下载过程中长时间没有新数据 |
+| `DOWNLOAD_FAILED` | 下载中断 |
+| `UNZIP_FAILED` | 更新包解压失败 |
+| `INSTALL_FAILED` | 文件复制安装失败 |
+| `NOT_INITIALIZED` | 未先调用 `EVDInit` |
+| `UNKNOWN` | 其它，原始错误在 `cause` 里 |
+
+内置文案表 `EVD_ERROR_MESSAGES` 也可以直接拿来用（`EVD_ERROR_MESSAGES[error.code]`）。
+
+### 更新弹窗内的错误提示
+
+用户点「现在更新」后如果下载或安装失败，弹窗会自动显示错误面板：错误文案、错误码、可滚动的完整详情，以及「重试」「复制错误信息」「关闭」三个按钮。「复制错误信息」会把时间、平台、阶段、错误码、地址、状态码、原始错误与堆栈一并写入剪贴板，方便用户直接发给开发者排查。
 
 > 一下命令全部必须在项目根目录执行 （与 package.json 同级）
 
@@ -155,7 +228,7 @@ export type EVDConfigType = {
   //  文件会被放在根目录的 basename 文件中，比如
   // 传入 ['public/test'] 这样一个文件夹，那么最终会被放到根目录的
   // /test 中
-  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制
+  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制（仅 cloudflare 适用）
   // 注意：必须使用相对路径，相对路径谁相对于 evd.config.ts 文件
   extraFolders: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
@@ -170,9 +243,26 @@ export type EVDConfigType = {
     token: string;
     projectName: string;
   };
+  //  自托管服务器设置
+  //  由 CI 自行上传 node_modules/.evd 目录，evd 只负责检测
+  selfHosted?: {
+    //  更新包最终可访问的地址，如 https://cdn.mycorp.com/app
+    url: string;
+  };
+  //  fullCode.zip 拆分设置
+  zipSplit?: {
+    //  是否拆分，默认按 provider 推断：cloudflare 为 true，netlify / selfHosted 为 false
+    enabled?: boolean;
+    //  超过该体积（MB）才拆分，默认 24
+    thresholdMB?: number;
+    //  每片体积（MB），默认 20
+    chunkSizeMB?: number;
+  };
   prebuiltConfig: PrebuiltConfigType;
 };
 ```
+
+三个 provider 按 `netlify` → `cloudflare` → `selfHosted` 的顺序自动探测，配置齐全的第一个生效。
 
 ## 更新版本
 
@@ -193,6 +283,71 @@ $ evd deploy
 ```
 
 这个命令主要是把 .evd 文件夹部署到 netlity 上，并且对远程版本号，和当前版本号进行多方面的判断，尽量避免误操作问题
+
+## 部署到自建服务器（CI）
+
+如果更新包不是通过 API 部署，而是由 CI 命令（rsync / scp / 内网发布脚本）传到自己的服务器上，用 `preDeploy` + `verify` 这一对命令。
+
+### 配置
+
+```typescript
+selfHosted: {
+  url: "https://cdn.mycorp.com/app",
+},
+```
+
+`selfHosted` 模式下执行 `evd deploy` 会直接报错，部署动作由你自己的 CI 完成。
+
+### evd preDeploy
+
+```shell
+$ evd preDeploy
+```
+
+跑完 `deploy` 里的全部检测，并把 `extraFolders` 复制进 `.evd`、按配置整形压缩包，通过后 `node_modules/.evd` 就是可以直接上传的内容。
+
+**全程无交互**，命中风险项直接报错并 `exit 1`，需要显式加参数放行：
+
+| 参数 | 放行的情况 |
+| --- | --- |
+| `--allow-first-deploy` | 远程尚未部署过任何版本（远程 `package.json` 取不到） |
+| `--allow-name-mismatch` | 本地与远程 `package.json` 的 `name` 不一致 |
+| `--allow-same-version` | 远程版本与本地一致（覆盖部署） |
+| `--allow-downgrade` | 远程版本高于本地 |
+| `--force` | 等价于上面全开 |
+| `--split` / `--no-split` | 覆盖 `configs.zipSplit.enabled` |
+| `--timeout <ms>` | 远程请求超时，默认 `10000` |
+
+注意：远程地址**连不上**（DNS 失败、连接被拒、超时）一律报错，`--allow-first-deploy` 也不放行——这正是要暴露的链接问题。
+
+### evd verify
+
+```shell
+$ evd verify
+```
+
+上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`、`fullCode.zip`（或全部分片）均可访问。任一项不通过即 `exit 1`。
+
+请求全部带 cache-buster，可用 `--retry <n>`（默认 3）、`--retry-delay <s>`（默认 5）应对 CDN 传播延迟。
+
+### GitLab CI 示例
+
+```yaml
+deploy:
+  script:
+    - npx evd prepare
+    - npx evd preDeploy
+    - rsync -av --delete node_modules/.evd/ "$DEPLOY_TARGET"
+    - npx evd verify
+```
+
+### 关于压缩包拆分
+
+`fullCode.zip` 超过 25MB 会被 Cloudflare Pages 拒绝，因此 cloudflare 下默认拆分成多个分片 + 一个 `fullCodeZipSplitZips/index.json` 描述文件，客户端会自动识别并合并下载。
+
+自建服务器没有这个限制，`selfHosted` 与 `netlify` 默认**不拆分**。需要时用 `configs.zipSplit` 或 `--split` 打开。
+
+> 关掉拆分时，`.evd` 里遗留的 `fullCodeZipSplitZips` 目录会被自动清理——否则它会被一起传上去，客户端读到旧的 `index.json` 就会去下载并不存在的分片。
 
 ### 手动检查版本更新
 

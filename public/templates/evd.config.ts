@@ -20,5 +20,15 @@ export default defineEVDConfig({
     token: __cloudflare_token__,
     projectName: __cloudflare_projectName__,
   },
+  //  自托管：由 CI 自行上传 node_modules/.evd，evd 只做检测
+  //  selfHosted: {
+  //    url: "https://cdn.example.com/app",
+  //  },
+  //  fullCode.zip 拆分设置，默认 cloudflare 拆分、其余不拆分
+  //  zipSplit: {
+  //    enabled: false,
+  //    thresholdMB: 24,
+  //    chunkSizeMB: 20,
+  //  },
   prebuiltConfig: {},
 });

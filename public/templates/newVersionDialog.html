@@ -112,10 +112,82 @@
         display: none;
         font-weight: bold;
       }
+
+      .error-box {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        background: #fff;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        display: none;
+        padding: 20px;
+        text-align: center;
+      }
+
+      .error-box .error-title {
+        font-size: 18px;
+        font-weight: bold;
+        color: #d93026;
+        margin-bottom: 12px;
+      }
+
+      .error-box .error-message {
+        font-size: 14px;
+        line-height: 1.6;
+        margin-bottom: 8px;
+      }
+
+      .error-box .error-code {
+        font-size: 12px;
+        color: #999;
+        margin-bottom: 12px;
+      }
+
+      .error-box .error-detail {
+        width: 100%;
+        max-height: 90px;
+        overflow: auto;
+        box-sizing: border-box;
+        padding: 8px;
+        margin-bottom: 12px;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        background: #fafafa;
+        font-family: Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.5;
+        color: #666;
+        text-align: left;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: text;
+        cursor: text;
+      }
+
+      .error-box .buttons-box button.copy-btn {
+        background-color: #f0f0f0;
+        color: #333;
+        border: 1px solid #d0d0d0;
+      }
     </style>
   </head>
   <body>
     <div class="loading-box">软件更新中……</div>
+    <div class="error-box">
+      <div class="error-title">更新失败</div>
+      <div class="error-message"></div>
+      <div class="error-code"></div>
+      <div class="error-detail"></div>
+      <div class="buttons-box">
+        <button id="retryBtn">重试</button>
+        <button id="copyErrorBtn" class="copy-btn">复制错误信息</button>
+        <button id="closeBtn">关闭</button>
+      </div>
+    </div>
     <div class="title-bar">
       <img src="" width="34" class="logo" style="display: none" />
       <span>有可用的新版本：</span>
@@ -133,15 +205,49 @@
     </div>
 
     <script>
-      const { ipcRenderer } = require("electron");
+      const { ipcRenderer, clipboard } = require("electron");
 
-      document.querySelector("#updateBtn").addEventListener("click", () => {
+      const loadingBoxRef = document.querySelector(".loading-box");
+      const errorBoxRef = document.querySelector(".error-box");
+
+      function startUpdate() {
         ipcRenderer.send("evd-update-now");
-        document.querySelector(".loading-box").style.display = "flex";
-      });
+        errorBoxRef.style.display = "none";
+        loadingBoxRef.style.display = "flex";
+      }
+
+      document
+        .querySelector("#updateBtn")
+        .addEventListener("click", startUpdate);
+      document
+        .querySelector("#retryBtn")
+        .addEventListener("click", startUpdate);
 
       document.querySelector("#skipBtn").addEventListener("click", () => {
         ipcRenderer.send("evd-skip");
+      });
+
+      document.querySelector("#closeBtn").addEventListener("click", () => {
+        ipcRenderer.send("evd-skip");
+      });
+
+      const copyErrorBtnRef = document.querySelector("#copyErrorBtn");
+      let errorDetailText = "";
+
+      copyErrorBtnRef.addEventListener("click", () => {
+        clipboard.writeText(errorDetailText);
+        copyErrorBtnRef.textContent = "已复制";
+        setTimeout(() => (copyErrorBtnRef.textContent = "复制错误信息"), 2000);
+      });
+
+      ipcRenderer.on("evd-update-error", (_, error) => {
+        errorDetailText = error.detail || error.message;
+        loadingBoxRef.style.display = "none";
+        errorBoxRef.querySelector(".error-message").textContent = error.message;
+        errorBoxRef.querySelector(".error-code").textContent = error.code;
+        errorBoxRef.querySelector(".error-detail").textContent =
+          errorDetailText;
+        errorBoxRef.style.display = "flex";
       });
 
       ipcRenderer.invoke("evd-get-logo").then((link) => {

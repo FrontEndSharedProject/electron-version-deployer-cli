@@ -40,7 +40,7 @@ export type EVDConfigType = {
   //  文件会被放在根目录的 basename 文件中，比如
   // 传入 ['public/test'] 这样一个文件夹，那么最终会被放到根目录的
   // /test 中
-  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制
+  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制（仅 cloudflare 适用）
   // 注意：必须使用相对路径，相对路径谁相对于 evd.config.ts 文件
   extraFolders?: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
@@ -54,6 +54,21 @@ export type EVDConfigType = {
     url: string;
     token: string;
     projectName: string;
+  };
+  //  自托管服务器设置
+  //  由 CI 自行上传 node_modules/.evd 目录，evd 只负责检测
+  selfHosted?: {
+    //  更新包最终可访问的地址，如 https://cdn.mycorp.com/app
+    url: string;
+  };
+  //  fullCode.zip 拆分设置
+  zipSplit?: {
+    //  是否拆分，默认按 provider 推断：cloudflare 为 true，netlify / selfHosted 为 false
+    enabled?: boolean;
+    //  超过该体积（MB）才拆分，默认 24
+    thresholdMB?: number;
+    //  每片体积（MB），默认 20
+    chunkSizeMB?: number;
   };
   prebuiltConfig: PrebuiltConfigType;
 };
