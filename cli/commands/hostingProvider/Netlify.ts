@@ -2,7 +2,7 @@ import { EVDConfigType } from "@/types/EVDConfigType";
 import { platform } from "node:os";
 import { spawn } from "node:child_process";
 import logSymbols from "log-symbols";
-import { ProviderInterface } from "./ProviderInterface";
+import { ProviderInterface, ProviderName } from "./ProviderInterface";
 
 export class Netlify implements ProviderInterface {
   private static _instance: Netlify;
@@ -13,6 +13,9 @@ export class Netlify implements ProviderInterface {
 
     return this._instance;
   }
+
+  readonly name: ProviderName = "netlify";
+  readonly defaultZipSplitEnabled = false;
 
   getUrl(configs: EVDConfigType): string {
     return configs.netlify?.url as string;
