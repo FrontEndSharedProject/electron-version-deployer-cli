@@ -1,127 +1,112 @@
 import { net } from "electron";
+import {
+  EVDError,
+  EVDErrorCodeEnum,
+  EVDErrorPhaseEnum,
+} from "@/types/EVDErrorType";
+import { httpStatusError, timeoutCodeOf, toEVDError } from "./toEVDError";
 
 interface RequestOptions {
   url: string;
-  responseType?: "json" | "stream" | "text";
+  responseType?: "json" | "text";
+  timeoutMs?: number;
+  phase?: EVDErrorPhaseEnum;
 }
 
-const TIMEOUT_MS = 5000; // 5秒超时
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 
 export async function netRequest<T = any>(options: RequestOptions): Promise<T> {
-  // 如果 net 不存在，使用 fetch
-  if (!net) {
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => {
-      abortController.abort();
-    }, TIMEOUT_MS);
+  const {
+    url,
+    responseType,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    phase = EVDErrorPhaseEnum.CHECK,
+  } = options;
+  const ctx = { phase, url };
 
-    try {
-      const response = await fetch(options.url, {
-        signal: abortController.signal,
-      });
-      clearTimeout(timeoutId);
+  const text = net
+    ? await requestByElectronNet(url, timeoutMs, ctx)
+    : await requestByFetch(url, timeoutMs, ctx);
 
-      if (options.responseType === "json") {
-        try {
-          return await response.json();
-        } catch (e) {
-          return null as T;
-        }
-      } else if (options.responseType === "stream") {
-        return response.body as T;
-      } else {
-        return (await response.text()) as T;
-      }
-    } catch (error: any) {
-      clearTimeout(timeoutId);
-      if (error.name === "AbortError") {
-        throw new Error("网络请求超时，请检查网络连接或使用 VPN 后重试");
-      }
-      throw error;
-    }
+  if (responseType !== "json") return text as T;
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    //  静态服务器常见行为：文件不存在时返回 200 + HTML 兜底页
+    throw new EVDError(EVDErrorCodeEnum.REMOTE_INVALID_JSON, {
+      ...ctx,
+      cause: e,
+    });
   }
+}
 
-  // 使用 net.request
-  return new Promise((resolve, reject) => {
-    const request = net.request(options.url);
+async function requestByFetch(
+  url: string,
+  timeoutMs: number,
+  ctx: { phase: EVDErrorPhaseEnum; url: string }
+) {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { signal: abortController.signal });
+    if (!response.ok) throw httpStatusError(response.status, ctx);
+    return await response.text();
+  } catch (error) {
+    throw toEVDError(error, ctx);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function requestByElectronNet(
+  url: string,
+  timeoutMs: number,
+  ctx: { phase: EVDErrorPhaseEnum; url: string }
+) {
+  return new Promise<string>((resolve, reject) => {
+    const request = net.request(url);
     request.setHeader("Accept-Encoding", "identity");
     request.setHeader("Cache-Control", "no-cache");
     let data = "";
-    let isResolved = false;
+    let isSettled = false;
 
-    const failOnce = (error: unknown) => {
-      if (isResolved) return;
-      isResolved = true;
-      cleanup();
-      reject(error);
+    const settle = (fn: () => void) => {
+      if (isSettled) return;
+      isSettled = true;
+      clearTimeout(timeoutId);
+      fn();
     };
 
-    // 设置超时
     const timeoutId = setTimeout(() => {
       request.abort();
-      failOnce(new Error("网络请求超时，请检查网络连接或使用 VPN 后重试"));
-    }, TIMEOUT_MS);
-
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-    };
+      settle(() => reject(new EVDError(timeoutCodeOf(ctx.phase), { ...ctx })));
+    }, timeoutMs);
 
     request.on("response", (response) => {
       const statusCode = response.statusCode ?? 0;
       if (statusCode < 200 || statusCode >= 300) {
-        failOnce(
-          new Error(
-            `请求失败，状态码: ${statusCode} ${response.statusMessage ?? ""}`.trim()
-          )
-        );
+        request.abort();
+        settle(() => reject(httpStatusError(statusCode, ctx)));
         return;
       }
 
       response.on("data", (chunk) => {
-        try {
-          if (options.responseType === "stream") {
-            if (!isResolved) {
-              isResolved = true;
-              cleanup();
-              resolve(response as any);
-            }
-            return;
-          }
-          data += chunk;
-        } catch (error) {
-          failOnce(error);
-        }
+        data += chunk;
       });
 
       response.on("end", () => {
-        if (isResolved) return;
-        isResolved = true;
-        cleanup();
-
-        if (options.responseType === "stream") return;
-
-        try {
-          if (options.responseType === "json") {
-            try {
-              resolve(JSON.parse(data));
-            } catch (e) {
-              resolve(null as T);
-            }
-          } else {
-            resolve(data as T);
-          }
-        } catch (error) {
-          failOnce(error);
-        }
+        settle(() => resolve(data));
       });
 
-      response.on("error", (error) => {
-        failOnce(error);
+      response.on("error", (error: unknown) => {
+        settle(() => reject(toEVDError(error, ctx)));
       });
     });
 
     request.on("error", (error) => {
-      failOnce(error);
+      settle(() => reject(toEVDError(error, ctx)));
     });
 
     request.end();

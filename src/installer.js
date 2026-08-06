@@ -27,7 +27,8 @@ try {
         ----------------------------------------------------------------\n
       `
   );
-  process.parentPort.postMessage("exitManually");
+  //  前缀与 src/main.ts 的 INSTALLER_FAILED_PREFIX 保持一致
+  process.parentPort.postMessage("installFailed:" + error.message);
   process.exit(0);
 }
 

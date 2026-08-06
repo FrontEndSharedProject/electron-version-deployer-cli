@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, app, shell, utilityProcess, net } from "electron";
+import { BrowserWindow, ipcMain, app, shell, utilityProcess } from "electron";
 import { format } from "node:url";
 import { join, sep } from "node:path";
 import {
@@ -21,9 +21,37 @@ import templateHtmlStr from "../public/templates/newVersionDialog.html?raw";
 import { platform } from "node:process";
 import { forceDeleteSync } from "@/utils/utils";
 import extract from "extract-zip";
-import { netRequest } from "@/helpers/netRequest";
+import {
+  netRequest,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "@/helpers/netRequest";
+import { joinRemoteUrl } from "@/utils/joinRemoteUrl";
+import {
+  downloadFile,
+  DEFAULT_DOWNLOAD_STALL_TIMEOUT_MS,
+} from "@/helpers/downloadFile";
+import { toEVDError } from "@/helpers/toEVDError";
+import {
+  EVDError,
+  EVDErrorCodeEnum,
+  EVDErrorPhaseEnum,
+  formatEVDErrorDetail,
+} from "@/types/EVDErrorType";
+
+export {
+  EVDError,
+  EVDErrorCodeEnum,
+  EVDErrorPhaseEnum,
+  EVD_ERROR_MESSAGES,
+  isEVDError,
+  formatEVDErrorDetail,
+} from "@/types/EVDErrorType";
 
 const id = `${Date.now()}-${Math.random()}`;
+
+//  与 src/installer.js 中 postMessage 的字面量保持一致
+const INSTALLER_DONE_MESSAGE = "exitManually";
+const INSTALLER_FAILED_PREFIX = "installFailed:";
 
 export enum EVDEventEnum {
   OPEN_LINK = "evd-open-link",
@@ -32,6 +60,7 @@ export enum EVDEventEnum {
   GET_CHANGELOGS = "evd-get-change-logs",
   GET_LOGO = "evd-get-logo",
   GET_CHANGELOGS_LINK = "evd-get-changelogs-link",
+  UPDATE_ERROR = "evd-update-error",
 }
 
 type EVDInitPropsType = {
@@ -49,7 +78,11 @@ type EVDInitPropsType = {
   detectionFrequency?: number;
   //  是否在程序运行时进行检测
   detectAtStart?: boolean;
-  //  当自动更新出现错误时的回掉
+  //  检测更新的请求超时时间/ms，默认 10000
+  requestTimeout?: number;
+  //  下载更新包的停顿超时时间/ms，连续该时长没有新数据才算超时，默认 60000
+  downloadStallTimeout?: number;
+  //  当自动更新出现错误时的回掉，回调参数为 EVDError
   onError?: (err: unknown) => void;
   //  在开始安装前调用，可以在里面关闭一些数据库连接之类的
   onBeforeNewPkgInstall?: (next: () => any, version: string) => void;
@@ -80,7 +113,7 @@ export function EVDInit(props: EVDInitPropsType) {
     try {
       await EVDCheckUpdate();
     } catch (e) {
-      onError(e);
+      onError(toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK }));
     }
   }, 1000 * detectionFrequency);
 
@@ -89,16 +122,21 @@ export function EVDInit(props: EVDInitPropsType) {
     try {
       await EVDCheckUpdate();
     } catch (e) {
-      onError(e);
+      onError(toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK }));
     }
   }, 1000 * 2);
 }
 
 export async function EVDCheckUpdate() {
-  const { remoteUrl } = getConfigs();
+  const { remoteUrl, requestTimeout } = getConfigs();
   const { version } = cacheCurrentPkgJSON;
-  const remoteJSON = await fetchRemotePkgJSON(remoteUrl);
-  if (!remoteJSON) throw new Error(`${remoteUrl}package.json 文件不存在`);
+  const remoteJSON = await fetchRemotePkgJSON(remoteUrl, requestTimeout);
+  if (!remoteJSON) {
+    throw new EVDError(EVDErrorCodeEnum.REMOTE_NOT_FOUND, {
+      phase: EVDErrorPhaseEnum.CHECK,
+      url: joinRemoteUrl(remoteUrl, "package.json"),
+    });
+  }
 
   const localVersion = versionToNum(version);
   const remoteVersion = versionToNum(remoteJSON.version);
@@ -199,26 +237,23 @@ async function showNewVersionDialog() {
 
 //  安装新版本
 async function installNewVersion() {
-  const { remoteUrl, onError } = getConfigs();
+  const { remoteUrl, requestTimeout } = getConfigs();
 
-  const remoteJSON = await fetchRemotePkgJSON(remoteUrl);
+  const remoteJSON = await fetchRemotePkgJSON(remoteUrl, requestTimeout);
   const needInstallFullSize = compareObjectsIsEqual(
     remoteJSON.dependencies,
     cacheCurrentPkgJSON.dependencies
   );
 
-  try {
-    await installPkg(!needInstallFullSize ? "fullCode.zip" : "logicCode.zip");
-  } catch (error: any) {
-    onError(error);
-  }
+  await installPkg(!needInstallFullSize ? "fullCode.zip" : "logicCode.zip");
 }
 
 async function installPkg(zipFile: string) {
-  const { remoteUrl } = getConfigs();
+  const { remoteUrl, requestTimeout, downloadStallTimeout } = getConfigs();
   const appPath = app.getAppPath();
 
   const unzipPath = join(appPath, "evdUnzip");
+  const zipPath = unzipPath + ".zip";
   const installerFile = join(appPath, "_evdInstallerTmp.js");
 
   // 如果路径存在，清空它
@@ -231,104 +266,70 @@ async function installPkg(zipFile: string) {
   }
   mkdirSync(unzipPath);
 
-  //  下载文件
-  await new Promise<void>(async (res, rej) => {
-    //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的额问题
-    //  原因是 cloudflare 只支持最大 25m 的文件上传
-    //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
+  //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的额问题
+  //  原因是 cloudflare 只支持最大 25m 的文件上传
+  //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
+  let fullCodeSplitIndexFile: false | string[] = false;
+  try {
+    fullCodeSplitIndexFile = await netRequest({
+      url: joinRemoteUrl(
+        remoteUrl,
+        `fullCodeZipSplitZips/index.json?hash=${Math.random()}`
+      ),
+      responseType: "json",
+      timeoutMs: requestTimeout,
+      phase: EVDErrorPhaseEnum.DOWNLOAD,
+    });
+  } catch (e) {}
 
-    //  判断远程分割配置文件是否存在
-    let fullCodeSplitIndexFile: false | string[] = false;
+  //  如果满足远程分割的条件
+  if (zipFile === "fullCode.zip" && Array.isArray(fullCodeSplitIndexFile)) {
+    const tmpFilePaths = fullCodeSplitIndexFile.map((fileName) =>
+      join(appPath, fileName)
+    );
+
     try {
-      fullCodeSplitIndexFile = await netRequest({
-        url: `${remoteUrl}/fullCodeZipSplitZips/index.json?hash=${Math.random()}`,
-        responseType: 'json'
-      });
-    } catch (e) {}
-
-    //  如果满足远程分割的条件
-    if (zipFile === "fullCode.zip" && fullCodeSplitIndexFile) {
-      const mergedStream = createWriteStream(unzipPath + ".zip");
-
-      //  下载文件到
-      //  appPath/fullCode.part1.zip
-      //  appPath/fullCode.part2.zip
-      for (let fileName of fullCodeSplitIndexFile) {
-        const tmpFilePath = join(appPath, fileName);
-        const tmpSplitZip = createWriteStream(tmpFilePath);
-        
-        await new Promise<void>((_res, _rej) => {
-          const request = net.request({
-            url: `${remoteUrl}/fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`,
-            method: 'GET'
-          });
-          request.setHeader("Accept-Encoding", "identity");
-          request.setHeader("Cache-Control", "no-cache");
-
-          request.on('response', (response) => {
-            //   @ts-ignore
-            response.pipe(tmpSplitZip)
-              .on("finish", () => {
-                tmpSplitZip.end(() => {
-                  mergedStream.write(readFileSync(tmpFilePath));
-                  _res();
-                });
-              })
-              .on("error", (error) => {
-                _rej(error);
-              });
-          });
-
-          request.on('error', (error) => {
-            _rej(error);
-          });
-
-          request.end();
-        }).catch(error => {
-          rej(error);
+      for (const [index, fileName] of fullCodeSplitIndexFile.entries()) {
+        await downloadFile({
+          url: joinRemoteUrl(
+            remoteUrl,
+            `fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`
+          ),
+          destPath: tmpFilePaths[index],
+          stallTimeoutMs: downloadStallTimeout,
         });
-        
-        //  删除临时文件
-        forceDeleteSync(tmpFilePath);
       }
 
-      mergedStream.end(() => {
-        res();
+      //  分片全部下载完成后再合并，避免中途失败留下半个包
+      await new Promise<void>((res, rej) => {
+        const mergedStream = createWriteStream(zipPath);
+        mergedStream.on("error", rej);
+        for (const tmpFilePath of tmpFilePaths) {
+          mergedStream.write(readFileSync(tmpFilePath));
+        }
+        mergedStream.end(() => res());
       });
-    } else {
-      const tmpZipFilePath = createWriteStream(unzipPath + ".zip");
-      
-      const request = net.request({
-        url: `${remoteUrl}/${zipFile}?hash=${Math.random()}`,
-        method: 'GET',
-      });
-
-      request.setHeader("Accept-Encoding", "identity");
-      request.setHeader("Cache-Control", "no-cache");
-
-      request.on('response', (response) => {
-        //   @ts-ignore
-        response.pipe(tmpZipFilePath)
-          .on("finish", () => {
-            tmpZipFilePath.end(() => {
-              res();
-            });
-          })
-          .on("error", (error) => {
-            rej(error);
-          });
-      });
-
-      request.on('error', (error) => {
-        rej(error);
-      });
-
-      request.end();
+    } finally {
+      //  删除临时文件
+      tmpFilePaths.filter(existsSync).forEach(forceDeleteSync);
     }
-  });
+  } else {
+    await downloadFile({
+      url: joinRemoteUrl(remoteUrl, `${zipFile}?hash=${Math.random()}`),
+      destPath: zipPath,
+      stallTimeoutMs: downloadStallTimeout,
+    });
+  }
 
   //  解压
-  await extract(unzipPath + ".zip", { dir: unzipPath });
+  try {
+    await extract(zipPath, { dir: unzipPath });
+  } catch (error) {
+    throw new EVDError(EVDErrorCodeEnum.UNZIP_FAILED, {
+      phase: EVDErrorPhaseEnum.INSTALL,
+      cause: error,
+    });
+  }
 
   //  等待解压完成，解压需要一定时间
   await new Promise((res) => setTimeout(res, 1000));
@@ -351,19 +352,26 @@ async function installPkg(zipFile: string) {
   //  开始执行安装
   const child = utilityProcess.fork(join(appPath, "_evdInstallerTmp.js"));
 
-  //  copy 需要事件，等待子进程执行完毕，或者超过 10 秒
+  //  copy 需要事件，等待子进程执行完毕，或者超过 5 分钟
   await Promise.race([
-    new Promise((res) => {
-      child.on("exit", () => res);
-    }),
-    new Promise((res) => {
+    new Promise<void>((res, rej) => {
+      let installError: EVDError | null = null;
+
       child.on("message", (msg) => {
-        if (msg === "exitManually") {
-          res(void 0);
+        if (typeof msg === "string" && msg.startsWith(INSTALLER_FAILED_PREFIX)) {
+          installError = new EVDError(EVDErrorCodeEnum.INSTALL_FAILED, {
+            phase: EVDErrorPhaseEnum.INSTALL,
+            message: msg.slice(INSTALLER_FAILED_PREFIX.length) || undefined,
+          });
+          rej(installError);
+          return;
         }
+        if (msg === INSTALLER_DONE_MESSAGE) res();
       });
+
+      child.on("exit", () => (installError ? rej(installError) : res()));
     }),
-    new Promise((res) => setTimeout(res, 5 * 60 * 1000)),
+    new Promise<void>((res) => setTimeout(res, 5 * 60 * 1000)),
   ]);
 }
 
@@ -379,21 +387,28 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
   });
 
   ipcMain.on(EVDEventEnum.UPDATE, (_) => {
-    fetchRemotePkgJSON(remoteUrl).then((pkg) => {
-      onBeforeNewPkgInstall(() => {
-        installNewVersion()
-          .then(() => {
-            //  不知道什么情况会出现
-            //  UnhandledRejection TypeError: Object has been destroyed
-            setTimeout(() => promptWindow.close(), 1);
-            setTimeout(() => app.relaunch(), 1);
-            setTimeout(() => app.exit(), 1);
-          })
-          .catch((e) => {
-            onError(e);
-          });
-      }, pkg.version);
-    });
+    const handleUpdateFailed = (error: unknown) => {
+      const evdError = toEVDError(error, { phase: EVDErrorPhaseEnum.DOWNLOAD });
+      onError(evdError);
+      //  通知弹窗展示错误，否则「软件更新中……」的遮罩会一直停在那里
+      notifyUpdateError(promptWindow, evdError);
+    };
+
+    fetchRemotePkgJSON(remoteUrl, getConfigs().requestTimeout)
+      .then((pkg) => {
+        onBeforeNewPkgInstall(() => {
+          installNewVersion()
+            .then(() => {
+              //  不知道什么情况会出现
+              //  UnhandledRejection TypeError: Object has been destroyed
+              setTimeout(() => promptWindow.close(), 1);
+              setTimeout(() => app.relaunch(), 1);
+              setTimeout(() => app.exit(), 1);
+            })
+            .catch(handleUpdateFailed);
+        }, pkg.version);
+      })
+      .catch(handleUpdateFailed);
   });
 
   ipcMain.handle(EVDEventEnum.GET_LOGO, () => {
@@ -401,18 +416,33 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
   });
 
   ipcMain.handle(EVDEventEnum.GET_CHANGELOGS, async () => {
-    const { remoteUrl } = getConfigs();
+    const { remoteUrl, requestTimeout } = getConfigs();
 
     return cacheChangelogs
       ? cacheChangelogs
-      : await fetchRemoteChangelogJSON(remoteUrl);
+      : await fetchRemoteChangelogJSON(remoteUrl, requestTimeout);
   });
 
   ipcMain.handle(EVDEventEnum.GET_CHANGELOGS_LINK, async () => {
     const { remoteUrl } = getConfigs();
 
-    return `${remoteUrl}/changelogs.html`;
+    return joinRemoteUrl(remoteUrl, "changelogs.html");
   });
+}
+
+function notifyUpdateError(promptWindow: BrowserWindow, error: EVDError) {
+  try {
+    if (promptWindow.isDestroyed()) return;
+    promptWindow.webContents.send(EVDEventEnum.UPDATE_ERROR, {
+      code: error.code,
+      phase: error.phase,
+      message: error.message,
+      detail: formatEVDErrorDetail(error, {
+        当前版本: cacheCurrentPkgJSON?.version,
+        更新地址: getConfigs().remoteUrl,
+      }),
+    });
+  } catch (e) {}
 }
 
 function cleanup(promptWindow: BrowserWindow) {
@@ -430,7 +460,12 @@ function cleanup(promptWindow: BrowserWindow) {
 }
 
 function getConfigs(): Required<EVDInitPropsType> {
-  if (!globalArgs) throw new Error("必须先执行 EVDInit 后才能继续运行！");
+  if (!globalArgs) {
+    throw new EVDError(EVDErrorCodeEnum.NOT_INITIALIZED, {
+      phase: EVDErrorPhaseEnum.CHECK,
+    });
+  }
+
   //  @ts-ignore
   return {
     ...{
@@ -444,7 +479,11 @@ function getConfigs(): Required<EVDInitPropsType> {
       //  默认六小时检测一次
       detectionFrequency: 60 * 60 * 6,
       detectAtStart: true,
+      requestTimeout: DEFAULT_REQUEST_TIMEOUT_MS,
+      downloadStallTimeout: DEFAULT_DOWNLOAD_STALL_TIMEOUT_MS,
     },
     ...globalArgs,
+    //  兼容 remoteUrl 带尾斜杠的写法，避免拼出 //package.json
+    remoteUrl: (globalArgs.remoteUrl ?? "").replace(/\/+$/, ""),
   };
 }
