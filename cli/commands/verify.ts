@@ -18,8 +18,8 @@ type CheckResult = {
 program
   .command("verify")
   .description("上传完成后校验远程更新链接是否真的生效")
-  .option("--retry <n>", "校验失败后的重试次数", "3")
-  .option("--retry-delay <s>", "两次重试之间的间隔秒数", "5")
+  .option("--retry <n>", "校验的总尝试次数（含首次）", "3")
+  .option("--retry-delay <s>", "两次尝试之间的间隔秒数", "5")
   .option("--timeout <ms>", "远程请求超时时间", "10000")
   .action(async (options) => {
     try {

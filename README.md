@@ -328,7 +328,7 @@ $ evd verify
 
 上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`、`fullCode.zip`（或全部分片）均可访问。任一项不通过即 `exit 1`。
 
-请求全部带 cache-buster，可用 `--retry <n>`（默认 3）、`--retry-delay <s>`（默认 5）应对 CDN 传播延迟。
+请求全部带 cache-buster，可用 `--retry <n>`、`--retry-delay <s>` 应对 CDN 传播延迟。`--retry` 是**总尝试次数（含首次）**，默认 3 表示最多校验 3 次；`--retry-delay` 是两次尝试之间的间隔秒数，默认 5。
 
 ### GitLab CI 示例
 

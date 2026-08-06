@@ -3,6 +3,8 @@ name: Publish Package
 on:
   push:
     branches: [main]
+  #  平台故障等原因导致 push 未触发时，可在 Actions 页面手动重跑
+  workflow_dispatch:
 
 permissions:
   id-token: write  # Required for OIDC
