@@ -2,6 +2,9 @@
 
 electron 版本版本更新命令行
 
+> **0.5.0 已发布** — 新增自建服务器部署（`evd preDeploy` / `evd verify`）与更新错误类型化（`EVDError`）。
+> 升级前请看 [0.5.0 版本说明与升级指南](#050-版本说明与升级指南)。**无破坏性变更，直接升级即可。**
+
 # 目的
 
 1. 减少每次版本更新包的大小，最理想的情况是每次只更新修改的代码，而不是整个软件.
@@ -365,6 +368,141 @@ EVDCheckUpdate().then((isHaveNewVersion: boolean) => {
   }
 });
 ```
+
+## 0.5.0 版本说明与升级指南
+
+### 一句话总结
+
+**没有破坏性变更**，从 0.4.x 直接升到 0.5.0 即可，现有配置和代码都不用改。新功能全部是可选的。
+
+```shell
+$ npm install electron-version-deployer-cli@0.5.0
+```
+
+### 新功能
+
+#### 1. 部署到自建服务器：`evd preDeploy` + `evd verify`
+
+0.4.x 只支持 Netlify / Cloudflare 两个 API 型部署目标。如果你的更新包是用自己的 CI 命令（rsync / scp / 内网脚本）传到自己服务器上的，以前只能执行 `evd prepare` 然后手动上传，**`evd deploy` 里的全部检测逻辑都被跳过**——版本号是否倒退、项目名是否对得上、远程有没有部署过，一个都不会检查。
+
+现在配上 `selfHosted` 就能用这一对命令补齐：
+
+```typescript
+//  evd.config.js
+selfHosted: {
+  url: "https://cdn.mycorp.com/app",
+},
+```
+
+```yaml
+# .gitlab-ci.yml
+deploy:
+  script:
+    - npx evd prepare
+    - npx evd preDeploy            # 检测 + extraFolders + 打包整形
+    - rsync -av --delete node_modules/.evd/ "$DEPLOY_TARGET"
+    - npx evd verify               # 确认远程真的生效
+```
+
+`preDeploy` 全程无交互，命中风险项直接 `exit 1`，适合 CI；`verify` 在上传后校验远程版本与各更新包可达。详见[部署到自建服务器（CI）](#部署到自建服务器ci)。
+
+#### 2. 更新错误类型化：`EVDError`
+
+0.4.x 里 `onError` 拿到的是被拼成字符串的普通 `Error`，没法区分「超时」「域名解析不了」「远程压根没部署」。最典型的场景是更新地址需要挂 VPN，用户没连时软件会一直静默超时，界面上什么都不显示。
+
+现在可以按 `code` 分别提示：
+
+```typescript
+import { EVDErrorCodeEnum, isEVDError } from "electron-version-deployer-cli/dist/main";
+
+onError(error) {
+  if (isEVDError(error) && error.code === EVDErrorCodeEnum.NETWORK_TIMEOUT) {
+    showTip("无法连接更新服务器，请先连接 VPN");
+  }
+}
+```
+
+详见[更新错误处理](#更新错误处理)。
+
+#### 3. 更新弹窗的失败提示
+
+下载或安装失败时，弹窗会显示错误面板（文案 + 错误码 + 完整详情 + 「重试」「复制错误信息」「关闭」），不再永久卡在「软件更新中……」。「复制错误信息」把时间、平台、阶段、错误码、地址、状态码、原始错误与堆栈一并写入剪贴板，用户可以直接发给你排查。
+
+#### 4. 压缩包拆分可配
+
+`zipSplit` 可以控制 `fullCode.zip` 是否拆分。Cloudflare 因为 25MB 单文件限制默认拆分，自建服务器与 Netlify 默认不拆分。
+
+### 升级需要注意什么
+
+#### 必看：`evd prepare` / `evd deploy` 现在会返回非 0 退出码
+
+0.4.x 里这两个命令失败时只打印错误、退出码仍是 0，**CI 里编译失败也会显示为成功**。0.5.0 修正为失败时 `exit 1`。
+
+> ⚠️ 如果你的 CI 之前"一直是绿的"，升级后可能会开始变红。这不是新问题，是一直存在的失败终于被暴露出来了。升级后第一次跑 CI 请留意。
+
+#### 检测更新的请求超时从 5 秒改为 10 秒
+
+写死的 5 秒对需要走 VPN / 跨境的地址偏短。如果你希望保持原来的行为：
+
+```typescript
+EVDInit({ remoteUrl, requestTimeout: 5000 });
+```
+
+#### `onError` 收到的对象变了（但兼容）
+
+回调签名 `(err: unknown) => void` 没变，`err.toString()` 和写日志的代码继续可用。只是现在传进来的是 `EVDError` 实例，多了 `code` / `phase` / `url` / `statusCode` / `cause` 字段可用。**不做任何改动也能正常工作。**
+
+#### 更新弹窗模板的兼容性
+
+新的错误面板依赖内置模板。运行时会优先加载 `node_modules/electron-version-deployer-cli/dist/templates/newVersionDialog.html`，你的软件更新到 0.5.0 后自然会用上新模板。老版本客户端收不到新增的 `evd-update-error` 事件也不会报错，行为与升级前一致。
+
+### 迁移步骤
+
+大多数项目只需要第 1 步。
+
+**1. 升级依赖（必做）**
+
+```shell
+$ npm install electron-version-deployer-cli@0.5.0
+```
+
+到这里就结束了——所有 0.4.x 的配置和调用方式都继续有效。
+
+**2. 想要按类型提示更新错误（可选）**
+
+在主进程的 `EVDInit` 里补 `onError` 分支，参考上面「更新错误类型化」一节。
+
+**3. 想要部署到自建服务器（可选）**
+
+在 `evd.config.js` 里加 `selfHosted`，CI 脚本改成 `prepare` → `preDeploy` → 上传 → `verify`。
+
+> ⚠️ 注意：如果你以前是"只跑 `evd prepare` 然后手动上传"，并且配置了 `extraFolders`，那么**这些文件夹此前一直没有被上传**（`extraFolders` 的复制只在 `evd deploy` 里执行）。0.5.0 把它移进了共享检测流程，`preDeploy` 也会执行。换句话说，改用 `preDeploy` 之后你的更新包里会多出这些文件夹——这是修复，不是回归。
+
+**4. 自建服务器想关掉压缩包拆分（可选）**
+
+自建服务器没有 Cloudflare 的 25MB 限制，`selfHosted` 下默认就不拆分，通常不用配。需要显式控制时：
+
+```typescript
+zipSplit: {
+  enabled: false,
+  thresholdMB: 24,
+  chunkSizeMB: 20,
+},
+```
+
+> 从拆分切到不拆分时，`.evd` 里遗留的 `fullCodeZipSplitZips` 目录会被自动清理。如果不清理，它会被一起传上去，客户端读到旧的分片描述文件后会去下载并不存在的分片。
+
+### 其它修复
+
+- 下载更新包增加了超时保护（此前连接挂起会永久卡住），采用停顿超时，慢速网络下载大包不会被误杀
+- 下载会校验 HTTP 状态码（此前 404 返回的 HTML 页会被原样写进 zip，随后抛出难以理解的解压错误）
+- 修复下载失败时软件仍然会重启的问题
+- 修复分片下载失败后没有中断、仍继续下载剩余分片的问题
+- 修复安装子进程失败时主进程当作成功处理的问题
+- `remoteUrl` 带尾斜杠不再拼出 `//package.json`（部分 CDN 与对象存储会直接 404）
+- **`remoteUrl` 支持子目录形式的地址**，如 `https://cdn.example.com/app/my-project`
+
+完整清单见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 安装预构建
 

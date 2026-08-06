@@ -27,9 +27,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: "pnpm"
 
-      # Ensure npm 11.5.1 or later is installed
+      #  provenance 需要 npm 11.5.1 以上
+      #  不用 @latest：npm 12 要求 node >= 22.22.2，会和上面的 node 20 冲突
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - run: pnpm install --no-frozen-lockfile
       - run: npm run build 
