@@ -2,7 +2,7 @@
  * CLI 侧的远程探测
  *
  * 不复用 src/helpers/netRequest.ts：那个依赖 electron 的 net 模块，
- * 在 CLI 环境下靠 net 为 undefined 走 fetch 兜底，且超时写死、无法绕过缓存。
+ * 在 CLI 环境下靠 net 为 undefined 走 fetch 兜底，太脆弱。
  */
 
 export type RemoteJSONResult<T> = {
@@ -26,10 +26,6 @@ type RequestOptions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10000;
-
-export function joinUrl(base: string, path: string) {
-  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
-}
 
 function withCacheBuster(url: string, noCache?: boolean) {
   if (!noCache) return url;

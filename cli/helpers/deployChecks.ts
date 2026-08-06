@@ -6,7 +6,8 @@ import logSymbols from "log-symbols";
 import { r } from "../utils";
 import { versionToNum } from "@/utils/versionToNum";
 import { ProviderInterface } from "../commands/hostingProvider/ProviderInterface";
-import { fetchRemoteJSON, joinUrl } from "./remoteProbe";
+import { fetchRemoteJSON } from "./remoteProbe";
+import { joinRemoteUrl } from "@/utils/joinRemoteUrl";
 
 export type CheckPolicy = {
   //  false 时不弹任何交互，命中风险项按 allowXxx 决定放行还是报错
@@ -82,10 +83,13 @@ async function checkRemotePackageJSON(
   policy: CheckPolicy
 ) {
   const url = provider.getUrl(configs);
-  const { data, reason } = await fetchRemoteJSON(joinUrl(url, "package.json"), {
-    timeoutMs: policy.timeoutMs,
-    noCache: true,
-  });
+  const { data, reason } = await fetchRemoteJSON(
+    joinRemoteUrl(url, "package.json"),
+    {
+      timeoutMs: policy.timeoutMs,
+      noCache: true,
+    }
+  );
 
   if (!data) {
     await gate({
@@ -100,7 +104,7 @@ async function checkRemotePackageJSON(
 
   console.log(
     logSymbols.info,
-    `远程当前版本 ${data.version} (${joinUrl(url, "package.json")})`
+    `远程当前版本 ${data.version} (${joinRemoteUrl(url, "package.json")})`
   );
   return data;
 }

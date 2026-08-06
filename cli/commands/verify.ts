@@ -5,11 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { formatBytes, r } from "../utils";
 import { getWhichProvider } from "../helpers/getWhichProvider";
 import { EVD_FOLDER } from "../helpers/deployChecks";
-import {
-  fetchRemoteJSON,
-  joinUrl,
-  probeRemoteFile,
-} from "../helpers/remoteProbe";
+import { fetchRemoteJSON, probeRemoteFile } from "../helpers/remoteProbe";
+import { joinRemoteUrl } from "@/utils/joinRemoteUrl";
 import { SPLIT_FOLDER_NAME, FULL_CODE_ZIP_NAME } from "../helpers/zipSplit";
 
 type CheckResult = {
@@ -82,7 +79,7 @@ async function runChecks(
   const requestOptions = { timeoutMs, noCache: true };
 
   const remotePKG = await fetchRemoteJSON(
-    joinUrl(url, "package.json"),
+    joinRemoteUrl(url, "package.json"),
     requestOptions
   );
   if (!remotePKG.data) {
@@ -112,7 +109,7 @@ async function runChecks(
   }
 
   const remoteChangelog = await fetchRemoteJSON(
-    joinUrl(url, "changelog.json"),
+    joinRemoteUrl(url, "changelog.json"),
     requestOptions
   );
   if (!remoteChangelog.data) {
@@ -155,7 +152,7 @@ async function checkSplitZips(
 ): Promise<CheckResult[]> {
   const indexPath = `${SPLIT_FOLDER_NAME}/index.json`;
   const remoteIndex = await fetchRemoteJSON<string[]>(
-    joinUrl(url, indexPath),
+    joinRemoteUrl(url, indexPath),
     requestOptions
   );
 
@@ -191,7 +188,10 @@ async function checkFile(
   path: string,
   requestOptions: { timeoutMs: number; noCache: boolean }
 ): Promise<CheckResult> {
-  const result = await probeRemoteFile(joinUrl(url, path), requestOptions);
+  const result = await probeRemoteFile(
+    joinRemoteUrl(url, path),
+    requestOptions
+  );
   return {
     label: path,
     ok: result.ok,
