@@ -82,6 +82,12 @@ type EVDInitPropsType = {
   requestTimeout?: number;
   //  下载更新包的停顿超时时间/ms，连续该时长没有新数据才算超时，默认 60000
   downloadStallTimeout?: number;
+  //  自动检查更新（启动检测 + 定时轮询）失败时是否静默，不触发 onError，默认 false
+  //  适用于更新地址需要 VPN 等网络前置条件的场景，避免用户一启动就被弹窗打扰
+  silentAutoCheck?: boolean;
+  //  自动检查更新失败时的回调，可只写日志不打扰用户
+  //  未提供时：silentAutoCheck 为 true 则完全静默，否则回退到 onError
+  onAutoCheckError?: (err: unknown) => void;
   //  当自动更新出现错误时的回掉，回调参数为 EVDError
   onError?: (err: unknown) => void;
   //  在开始安装前调用，可以在里面关闭一些数据库连接之类的
@@ -102,7 +108,7 @@ export function EVDInit(props: EVDInitPropsType) {
   }
 
   globalArgs = props;
-  const { detectionFrequency, detectAtStart, onError } = getConfigs();
+  const { detectionFrequency, detectAtStart } = getConfigs();
   //  获取当前程序执行的 JSON 文件
   const appPath = app.getAppPath();
   cacheCurrentPkgJSON = JSON.parse(
@@ -113,7 +119,7 @@ export function EVDInit(props: EVDInitPropsType) {
     try {
       await EVDCheckUpdate();
     } catch (e) {
-      onError(toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK }));
+      handleAutoCheckError(e);
     }
   }, 1000 * detectionFrequency);
 
@@ -122,9 +128,19 @@ export function EVDInit(props: EVDInitPropsType) {
     try {
       await EVDCheckUpdate();
     } catch (e) {
-      onError(toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK }));
+      handleAutoCheckError(e);
     }
   }, 1000 * 2);
+}
+
+//  仅用于自动检查（启动检测 + 定时轮询）；手动调用 EVDCheckUpdate 的错误依旧原样 reject
+function handleAutoCheckError(e: unknown) {
+  const { onError, onAutoCheckError, silentAutoCheck } = getConfigs();
+  const error = toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK });
+
+  if (onAutoCheckError) return onAutoCheckError(error);
+  if (silentAutoCheck) return;
+  onError(error);
 }
 
 export async function EVDCheckUpdate() {
@@ -470,6 +486,8 @@ function getConfigs(): Required<EVDInitPropsType> {
   return {
     ...{
       onError: () => {},
+      silentAutoCheck: false,
+      onAutoCheckError: undefined,
       onBeforeNewPkgInstall: (next, version: string) => {
         next();
       },

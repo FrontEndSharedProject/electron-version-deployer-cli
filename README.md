@@ -111,6 +111,11 @@ type EVDInitPropsType = {
   requestTimeout?: number;
   //  下载更新包的停顿超时时间/ms，连续该时长没有新数据才算超时，默认 60000
   downloadStallTimeout?: number;
+  //  自动检查更新（启动检测 + 定时轮询）失败时是否静默，不触发 onError，默认 false
+  silentAutoCheck?: boolean;
+  //  自动检查更新失败时的回调，可只写日志不打扰用户
+  //  未提供时：silentAutoCheck 为 true 则完全静默，否则回退到 onError
+  onAutoCheckError?: (err: unknown) => void;
   //  当自动更新出现错误时的回掉，回调参数为 EVDError
   onError?: (err: unknown) => void;
   onBeforeNewPkgInstall?: (next: () => any) => void;
@@ -185,6 +190,39 @@ EVDInit({
 ### 更新弹窗内的错误提示
 
 用户点「现在更新」后如果下载或安装失败，弹窗会自动显示错误面板：错误文案、错误码、可滚动的完整详情，以及「重试」「复制错误信息」「关闭」三个按钮。「复制错误信息」会把时间、平台、阶段、错误码、地址、状态码、原始错误与堆栈一并写入剪贴板，方便用户直接发给开发者排查。
+
+### 自动检查静默，手动检查照常报错
+
+更新地址需要 VPN 时，用户往往软件都启动了 VPN 还没连上，启动检测必然失败。默认情况下这个错误会走 `onError`，用户一开软件就被弹窗糊脸。
+
+`EVDInit` 里的定时轮询与启动检测统称「自动检查」，用 `silentAutoCheck` 让它们失败时不再触发 `onError`，再用 `onAutoCheckError` 把错误写进日志：
+
+```typescript
+EVDInit({
+  remoteUrl: import.meta.env.REMOTE_URL,
+  silentAutoCheck: true,
+  onAutoCheckError(error) {
+    //  只记日志，不打扰用户
+    writeError(isEVDError(error) ? formatEVDErrorDetail(error) : error, "evd");
+  },
+  onError(error) {
+    //  下载 / 安装阶段仍然提示，那是用户点了「现在更新」后的主动操作
+    showUpdateErrorDialog(error);
+  },
+});
+```
+
+手动调用的 `EVDCheckUpdate()` 不受这两个参数影响，错误依旧以 rejected Promise 抛出，自己 `.catch()` 提示即可：
+
+```typescript
+EVDCheckUpdate()
+  .then((isHaveNewVersion) => {
+    if (!isHaveNewVersion) showTip("当前已是最新版本！");
+  })
+  .catch((error) => showUpdateErrorDialog(error, "版本检查失败！"));
+```
+
+`onAutoCheckError` 优先级高于 `silentAutoCheck`：只要提供了它，自动检查的错误就只走它，不再走 `onError`。两者都不提供时行为与旧版本一致。
 
 > 一下命令全部必须在项目根目录执行 （与 package.json 同级）
 

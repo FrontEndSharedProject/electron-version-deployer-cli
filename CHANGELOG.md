@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1] - 2026-08-08
+
+### 新增
+
+- `EVDInit` 新增 `silentAutoCheck`（默认 `false`）：为 `true` 时，自动检查更新（启动检测 + 定时轮询）失败不再触发 `onError`。适用于更新地址需要 VPN 的场景，避免用户软件刚启动、VPN 还没连上就被弹窗打扰。
+- `EVDInit` 新增 `onAutoCheckError`：自动检查更新失败时的独立回调，可只写日志不提示用户。提供后自动检查的错误只走它，不再走 `onError`；两者都不提供时行为与旧版本一致。
+- 手动调用 `EVDCheckUpdate()` 不受上述两个参数影响，错误依旧以 rejected Promise 抛出，可自行 `.catch()` 提示；下载与安装阶段的错误也依旧走 `onError`。
+
 ## [0.5.0] - 2026-08-06
 
 ### 新增
