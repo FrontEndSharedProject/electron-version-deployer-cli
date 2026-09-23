@@ -30,7 +30,7 @@ import {
   downloadFile,
   DEFAULT_DOWNLOAD_STALL_TIMEOUT_MS,
 } from "@/helpers/downloadFile";
-import { toEVDError } from "@/helpers/toEVDError";
+import { isPermissionError, toEVDError } from "@/helpers/toEVDError";
 import {
   EVDError,
   EVDErrorCodeEnum,
@@ -246,7 +246,7 @@ async function showNewVersionDialog() {
       //  事件处理
       bindEvent(promptWindow, onError);
     } catch (e) {
-      onError(e);
+      onError(toEVDError(e, { phase: EVDErrorPhaseEnum.CHECK }));
     }
   });
 }
@@ -341,10 +341,12 @@ async function installPkg(zipFile: string) {
   try {
     await extract(zipPath, { dir: unzipPath });
   } catch (error) {
-    throw new EVDError(EVDErrorCodeEnum.UNZIP_FAILED, {
-      phase: EVDErrorPhaseEnum.INSTALL,
-      cause: error,
-    });
+    throw new EVDError(
+      isPermissionError(error)
+        ? EVDErrorCodeEnum.PERMISSION_DENIED
+        : EVDErrorCodeEnum.UNZIP_FAILED,
+      { phase: EVDErrorPhaseEnum.INSTALL, cause: error }
+    );
   }
 
   //  等待解压完成，解压需要一定时间
@@ -375,10 +377,16 @@ async function installPkg(zipFile: string) {
 
       child.on("message", (msg) => {
         if (typeof msg === "string" && msg.startsWith(INSTALLER_FAILED_PREFIX)) {
-          installError = new EVDError(EVDErrorCodeEnum.INSTALL_FAILED, {
-            phase: EVDErrorPhaseEnum.INSTALL,
-            message: msg.slice(INSTALLER_FAILED_PREFIX.length) || undefined,
-          });
+          const detail = msg.slice(INSTALLER_FAILED_PREFIX.length);
+          installError = isPermissionError(detail)
+            ? new EVDError(EVDErrorCodeEnum.PERMISSION_DENIED, {
+                phase: EVDErrorPhaseEnum.INSTALL,
+                cause: detail,
+              })
+            : new EVDError(EVDErrorCodeEnum.INSTALL_FAILED, {
+                phase: EVDErrorPhaseEnum.INSTALL,
+                message: detail || undefined,
+              });
           rej(installError);
           return;
         }

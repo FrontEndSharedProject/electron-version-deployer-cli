@@ -42,8 +42,19 @@ const SSL_PATTERNS = [
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
 ];
 
+const PERMISSION_CODES = ["EPERM", "EACCES"];
+
 function matchAny(text: string, patterns: string[]) {
   return patterns.some((pattern) => text.includes(pattern));
+}
+
+//  只认带 path 的文件系统错误，socket 的 connect EACCES 不算；安装子进程回传的是 "EPERM: ..." 纯文本
+export function isPermissionError(error: unknown): boolean {
+  return [error, (error as any)?.cause].some((item: any) =>
+    typeof item === "string"
+      ? /^(EPERM|EACCES)\b/.test(item)
+      : PERMISSION_CODES.includes(item?.code) && typeof item?.path === "string"
+  );
 }
 
 /**
@@ -67,6 +78,10 @@ export function toEVDError(error: unknown, ctx: EVDErrorContext): EVDError {
     .toUpperCase();
 
   const context = { ...ctx, cause: ctx.cause ?? error, message: undefined };
+
+  if (isPermissionError(error)) {
+    return new EVDError(EVDErrorCodeEnum.PERMISSION_DENIED, context);
+  }
 
   if (raw?.name === "AbortError" || matchAny(text, TIMEOUT_PATTERNS)) {
     return new EVDError(timeoutCodeOf(ctx.phase), context);

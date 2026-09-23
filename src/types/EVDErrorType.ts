@@ -16,6 +16,8 @@ export enum EVDErrorCodeEnum {
   DOWNLOAD_FAILED = "DOWNLOAD_FAILED",
   UNZIP_FAILED = "UNZIP_FAILED",
   INSTALL_FAILED = "INSTALL_FAILED",
+  //  没有权限写入安装目录，Windows 下常见于装在 C:\Program Files
+  PERMISSION_DENIED = "PERMISSION_DENIED",
   //  未调用 EVDInit 就使用其它方法
   NOT_INITIALIZED = "NOT_INITIALIZED",
   UNKNOWN = "UNKNOWN",
@@ -45,6 +47,10 @@ export const EVD_ERROR_MESSAGES: Record<EVDErrorCodeEnum, string> = {
   [EVDErrorCodeEnum.DOWNLOAD_FAILED]: "下载更新包失败，请检查网络连接后重试",
   [EVDErrorCodeEnum.UNZIP_FAILED]: "更新包解压失败，请重试",
   [EVDErrorCodeEnum.INSTALL_FAILED]: "更新包安装失败，请重试",
+  [EVDErrorCodeEnum.PERMISSION_DENIED]:
+    process.platform === "win32"
+      ? "没有权限写入软件安装目录，请完全退出软件后，右键点击软件图标选择「以管理员身份运行」，再重新更新"
+      : "没有权限写入软件安装目录，请检查安装目录的写入权限后重试",
   [EVDErrorCodeEnum.NOT_INITIALIZED]: "必须先执行 EVDInit 后才能继续运行！",
   [EVDErrorCodeEnum.UNKNOWN]: "更新失败，请稍后重试",
 };

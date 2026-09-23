@@ -182,6 +182,7 @@ EVDInit({
 | `DOWNLOAD_FAILED` | 下载中断 |
 | `UNZIP_FAILED` | 更新包解压失败 |
 | `INSTALL_FAILED` | 文件复制安装失败 |
+| `PERMISSION_DENIED` | 没有权限写入软件安装目录，Windows 下常见于装在 `C:\Program Files`，文案会提示「以管理员身份运行」 |
 | `NOT_INITIALIZED` | 未先调用 `EVDInit` |
 | `UNKNOWN` | 其它，原始错误在 `cause` 里 |
 
