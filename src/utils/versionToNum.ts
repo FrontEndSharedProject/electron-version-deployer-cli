@@ -1,3 +1,5 @@
+export const STRICT_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
 //  计算版本号大小,转化大小
 export function versionToNum(a: string) {
   let c = a.split(".");

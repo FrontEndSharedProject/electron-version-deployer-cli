@@ -5,7 +5,7 @@ import {
   fetchRemoteChangelogJSON,
   fetchRemotePkgJSON,
 } from "@/helpers/fetchRemotePkgJSON";
-import { versionToNum } from "@/utils/versionToNum";
+import { STRICT_VERSION_RE, versionToNum } from "@/utils/versionToNum";
 import {
   createWriteStream,
   existsSync,
@@ -60,7 +60,6 @@ const STALL_THRESHOLD_MS = 10000;
 const PROGRESS_IPC_THROTTLE_MS = 80;
 const OPTIONAL_UPDATE_TITLE = "有可用的更新";
 const FORCE_UPDATE_TITLE = "版本过低，必须安装新版本";
-const SEMVER_EXACT_RE = /^\d+\.\d+\.\d+$/;
 const EVD_TEMPLATE_VERSION = 1;
 
 export enum EVDEventEnum {
@@ -143,7 +142,7 @@ function shouldForceUpdate(localVersionStr: string, remoteJSON: any): boolean {
   const minSupportedVersion = remoteJSON?.minSupportedVersion;
   if (
     typeof minSupportedVersion !== "string" ||
-    !SEMVER_EXACT_RE.test(minSupportedVersion)
+    !STRICT_VERSION_RE.test(minSupportedVersion)
   ) {
     return false;
   }
@@ -243,7 +242,37 @@ function isLocalTemplateCompatible(filePath: string): boolean {
 }
 
 const watchedForceHostWindows = new WeakSet<BrowserWindow>();
+const watchedClosedHostWindows = new WeakSet<BrowserWindow>();
 let isForceWindowGuardBound = false;
+
+function watchHostWindowClosed(hostWindow: BrowserWindow) {
+  if (
+    !hostWindow ||
+    hostWindow === activePromptWindow ||
+    hostWindow.isDestroyed() ||
+    watchedClosedHostWindows.has(hostWindow)
+  ) {
+    return;
+  }
+  watchedClosedHostWindows.add(hostWindow);
+  hostWindow.on("closed", () => {
+    const promptWindow = activePromptWindow;
+    //  如果只剩下一个窗口，关闭自己
+    if (
+      promptWindow &&
+      !promptWindow.isDestroyed() &&
+      BrowserWindow.getAllWindows().length == 1
+    ) {
+      if (isForceUpdate) {
+        if (!isRelaunching) {
+          exitAppIfForceUpdateNotInstalling();
+        }
+      } else if (!isUpdating) {
+        cleanup(promptWindow);
+      }
+    }
+  });
+}
 
 function blockHostWindow(
   hostWindow: BrowserWindow,
@@ -273,6 +302,7 @@ function watchHostWindowInForceMode(
   if (!hostWindow || hostWindow === promptWindow || hostWindow.isDestroyed()) {
     return;
   }
+  watchHostWindowClosed(hostWindow);
   if (!watchedForceHostWindows.has(hostWindow)) {
     watchedForceHostWindows.add(hostWindow);
     hostWindow.on("show", () => {
@@ -433,30 +463,9 @@ async function showNewVersionDialog(forceUpdate = false) {
       promptWindow.once("ready-to-show", () => {
         promptWindow.show();
 
-        const watchedHostWindows = new WeakSet<BrowserWindow>();
         const bindHostWindowsClosed = () => {
-          const allWindows = BrowserWindow.getAllWindows();
-          // 遍历每个窗口实例，并添加 'closed' 事件监听器
-          allWindows.forEach((window) => {
-            if (window === promptWindow || watchedHostWindows.has(window)) {
-              return;
-            }
-            watchedHostWindows.add(window);
-            window.on("closed", () => {
-              //  如果只剩下一个窗口，关闭自己
-              if (
-                !promptWindow.isDestroyed() &&
-                BrowserWindow.getAllWindows().length == 1
-              ) {
-                if (isForceUpdate) {
-                  if (!isRelaunching) {
-                    app.exit(0);
-                  }
-                } else {
-                  cleanup(promptWindow);
-                }
-              }
-            });
+          BrowserWindow.getAllWindows().forEach((window) => {
+            watchHostWindowClosed(window);
           });
         };
 
@@ -1361,8 +1370,9 @@ function cleanup(promptWindow: BrowserWindow) {
     activeTracker = null;
   }
   isUpdating = false;
-  isForceUpdate = false;
-  isRelaunching = false;
+  if (!isRelaunching) {
+    isForceUpdate = false;
+  }
   if (activePromptWindow === promptWindow) {
     activePromptWindow = null;
   }

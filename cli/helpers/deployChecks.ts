@@ -11,7 +11,7 @@ import {
 import { basename, join } from "node:path";
 import logSymbols from "log-symbols";
 import { r } from "../utils";
-import { versionToNum } from "@/utils/versionToNum";
+import { STRICT_VERSION_RE, versionToNum } from "@/utils/versionToNum";
 import { ProviderInterface } from "../commands/hostingProvider/ProviderInterface";
 import { fetchRemoteJSON } from "./remoteProbe";
 import { joinRemoteUrl } from "@/utils/joinRemoteUrl";
@@ -29,8 +29,6 @@ export type CheckPolicy = {
 };
 
 export const EVD_FOLDER = "node_modules/.evd";
-
-const STRICT_VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 export type MinVersionCLIOptions = {
   minSupportedVersion?: string;
@@ -183,7 +181,12 @@ export async function runDeployChecks(
 
   const remotePKG = await checkRemotePackageJSON(configs, provider, policy);
   if (remotePKG) {
-    await validateRemotePackageJSON(remotePKG, policy, resolvedMinVersion);
+    await validateRemotePackageJSON(
+      remotePKG,
+      compiledPackageJSON,
+      policy,
+      resolvedMinVersion
+    );
   }
 
   if (policy.interactive && resolvedMinVersion.minSupportedVersion) {
@@ -270,12 +273,10 @@ async function checkRemotePackageJSON(
  */
 async function validateRemotePackageJSON(
   remotePKG: any,
+  compiledPackageJSON: any,
   policy: CheckPolicy,
   resolvedMinVersion: ResolvedMinSupportedVersion
 ) {
-  const compiledPackageJSON = JSON.parse(
-    readFileSync(r(`${EVD_FOLDER}/package.json`), "utf-8")
-  );
   const compiledName = compiledPackageJSON.name;
   const remoteName = remotePKG.name;
 
@@ -325,7 +326,7 @@ async function validateRemotePackageJSON(
   const localMin = resolvedMinVersion.minSupportedVersion;
   const isMinVersionDowngrade =
     typeof remoteMin === "string" &&
-    remoteMin.length > 0 &&
+    STRICT_VERSION_RE.test(remoteMin) &&
     (localMin === undefined || versionToNum(remoteMin) > versionToNum(localMin));
 
   if (isMinVersionDowngrade && resolvedMinVersion.source !== "CLI") {
