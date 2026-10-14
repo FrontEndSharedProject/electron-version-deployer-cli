@@ -4,7 +4,9 @@ import logSymbols from "log-symbols";
 import { r } from "../utils";
 import { getWhichProvider } from "../helpers/getWhichProvider";
 import {
+  applyMinSupportedVersion,
   createCheckPolicy,
+  extractMinVersionCLIOptions,
   runDeployChecks,
   EVD_FOLDER,
 } from "../helpers/deployChecks";
@@ -13,17 +15,29 @@ import { applyZipSplit, resolveZipSplitOptions } from "../helpers/zipSplit";
 program
   .command("deploy")
   .description("执行部署")
+  .option("--min-supported-version <version>", "显式指定最低支持版本")
+  .option("--force-update", "将最低支持版本设为当前待部署版本")
+  .option("--no-force-update", "本次部署不声明最低支持版本")
   .option("--split", "强制拆分 fullCode.zip")
   .option("--no-split", "不拆分 fullCode.zip")
-  .action(async (options) => {
+  .action(async (options, command) => {
     try {
       const configs = await getConfigs();
       const provider = getWhichProvider(configs);
 
-      await runDeployChecks(
+      const resolvedMinVersion = await runDeployChecks(
         configs,
         provider,
-        createCheckPolicy({ interactive: true })
+        createCheckPolicy({ interactive: true }),
+        extractMinVersionCLIOptions(
+          options,
+          command?.parent?.rawArgs ?? process.argv
+        )
+      );
+
+      applyMinSupportedVersion(
+        r(EVD_FOLDER),
+        resolvedMinVersion.minSupportedVersion
       );
 
       applyZipSplit(

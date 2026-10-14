@@ -70,5 +70,6 @@ export type EVDConfigType = {
     //  每片体积（MB），默认 20
     chunkSizeMB?: number;
   };
+  minSupportedVersion?: string;
   prebuiltConfig: PrebuiltConfigType;
 };

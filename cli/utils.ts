@@ -4,9 +4,10 @@ import { resolve, join, dirname } from "node:path";
 const pkgPath = PkgUpSync();
 
 export function r(...paths: string[]) {
-  if (!pkgPath) return "./";
-  if (paths.length === 0) return dirname(resolve(pkgPath));
-  return join(dirname(resolve(pkgPath)), ...paths);
+  const currentPkgPath = PkgUpSync({ cwd: process.cwd() }) || pkgPath;
+  if (!currentPkgPath) return "./";
+  if (paths.length === 0) return dirname(resolve(currentPkgPath));
+  return join(dirname(resolve(currentPkgPath)), ...paths);
 }
 
 export function formatBytes(bytes: number) {

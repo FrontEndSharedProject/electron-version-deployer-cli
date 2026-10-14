@@ -18,6 +18,11 @@ import { JSDOM } from "jsdom";
 import DOMPurify from "dompurify";
 import { archiveFiles } from "../helpers/archiveFiles";
 import { normalizeToOSEOL } from "../helpers/docsHelper";
+import {
+  applyMinSupportedVersion,
+  EVD_FOLDER,
+  resolveMinSupportedVersion,
+} from "../helpers/deployChecks";
 
 program
   .command("prepare")
@@ -45,7 +50,7 @@ program
     );
   });
 
-async function copySourceAndZipFiles(configs: EVDConfigType) {
+export async function copySourceAndZipFiles(configs: EVDConfigType) {
   const logicCodeZipPath = r("node_modules/.evd/logicCode.zip");
   //  including node_modules
   const fullCodeZipPath = r("node_modules/.evd/fullCode.zip");
@@ -86,6 +91,12 @@ async function copySourceAndZipFiles(configs: EVDConfigType) {
     );
   }
 
+  const pkgContent = JSON.parse(readFileSync(packageJSONPath, "utf-8"));
+  const resolvedMinVersion = resolveMinSupportedVersion(
+    configs,
+    pkgContent.version
+  );
+
   //  生成压缩文件
   await archiveFiles(fullCodeZipPath, [
     nodeModulesPath,
@@ -96,6 +107,7 @@ async function copySourceAndZipFiles(configs: EVDConfigType) {
 
   //  将 package.json 放进去
   copyFileSync(packageJSONPath, r("node_modules/.evd/package.json"));
+  applyMinSupportedVersion(r(EVD_FOLDER), resolvedMinVersion.minSupportedVersion);
 
   //  note: cloudflare 需要去配置 cors
   //  https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/cors/

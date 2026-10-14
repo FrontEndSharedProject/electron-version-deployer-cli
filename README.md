@@ -310,6 +310,8 @@ export type EVDConfigType = {
     //  每片体积（MB），默认 20
     chunkSizeMB?: number;
   };
+  //  最低支持版本（三段数字 x.y.z），低于该版本的客户端将进入强制更新
+  minSupportedVersion?: string;
   prebuiltConfig: PrebuiltConfigType;
 };
 ```
@@ -336,6 +338,21 @@ $ evd deploy
 
 这个命令主要是把 .evd 文件夹部署到 netlity 上，并且对远程版本号，和当前版本号进行多方面的判断，尽量避免误操作问题
 
+### 强制更新与最低支持版本（`minSupportedVersion`）
+
+通过声明最低支持版本（`minSupportedVersion`），本地版本低于该值的客户端将进入**强制更新**（必须完成新版本安装才能继续使用，拒绝更新则退出软件）；本地版本高于或等于该值的客户端仍为**普通更新**。
+
+- **配置持久化**：在 `evd.config.ts` 中设置 `minSupportedVersion: "1.2.0"`，后续普通发布会自动沿用该下限，不会因下一次普通发布而放跑仍停留在旧版本的客户端。
+- **CLI 参数覆盖**（仅 `evd deploy` 与 `evd preDeploy` 支持，三者互斥，优先级：`CLI > 配置 > 未声明`）：
+  - `--min-supported-version <version>`：显式指定本次部署的最低支持版本（如 `1.2.0`）。
+  - `--force-update`：简写，将最低支持版本设为本次待部署版本（所有旧版本客户端均强制更新到最新版）。
+  - `--no-force-update`：本次部署不声明最低支持版本，忽略配置文件中的 `minSupportedVersion`。
+- **校验与降级门禁**：
+  - 格式必须严格匹配 `^\d+\.\d+\.\d+$`（不支持预发布后缀），且不能高于本次待部署版本。
+  - 当远程已有的 `minSupportedVersion` 高于本次生效值（含本次未声明）且生效值并非来自显式 CLI 参数时，`evd deploy` 会弹出交互确认，`evd preDeploy` 需传入 `--allow-min-version-downgrade`（或 `--force`）放行。
+  - 修改已发布同一版本的 `minSupportedVersion` 属于同版本覆盖部署，沿用 `--allow-same-version` 门禁。
+- **旧客户端兼容性**：不支持 `minSupportedVersion` 字段的旧版客户端会直接忽略该字段，按普通更新处理；强制更新仅对已运行支持该字段版本的客户端生效。
+
 ## 部署到自建服务器（CI）
 
 如果更新包不是通过 API 部署，而是由 CI 命令（rsync / scp / 内网发布脚本）传到自己的服务器上，用 `preDeploy` + `verify` 这一对命令。
@@ -360,13 +377,17 @@ $ evd preDeploy
 
 **全程无交互**，命中风险项直接报错并 `exit 1`，需要显式加参数放行：
 
-| 参数 | 放行的情况 |
+| 参数 | 放行的情况 / 作用 |
 | --- | --- |
 | `--allow-first-deploy` | 远程尚未部署过任何版本（远程 `package.json` 取不到） |
 | `--allow-name-mismatch` | 本地与远程 `package.json` 的 `name` 不一致 |
 | `--allow-same-version` | 远程版本与本地一致（覆盖部署） |
 | `--allow-downgrade` | 远程版本高于本地 |
-| `--force` | 等价于上面全开 |
+| `--allow-min-version-downgrade` | 远程 `minSupportedVersion` 高于本次生效值（含取消最低支持版本） |
+| `--force` | 等价于开启上面全部 `--allow-*` 参数（不包含 `--force-update`，不会写入最低支持版本） |
+| `--min-supported-version <version>` | 显式指定最低支持版本（覆盖配置） |
+| `--force-update` | 将最低支持版本设为当前待部署版本 |
+| `--no-force-update` | 本次不声明最低支持版本（忽略配置） |
 | `--split` / `--no-split` | 覆盖 `configs.zipSplit.enabled` |
 | `--timeout <ms>` | 远程请求超时，默认 `10000` |
 
@@ -378,7 +399,7 @@ $ evd preDeploy
 $ evd verify
 ```
 
-上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`、`fullCode.zip`（或全部分片）均可访问。任一项不通过即 `exit 1`。
+上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` / `minSupportedVersion` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`、`fullCode.zip`（或全部分片）均可访问。任一项不通过即 `exit 1`。
 
 请求全部带 cache-buster，可用 `--retry <n>`、`--retry-delay <s>` 应对 CDN 传播延迟。`--retry` 是**总尝试次数（含首次）**，默认 3 表示最多校验 3 次；`--retry-delay` 是两次尝试之间的间隔秒数，默认 5。
 
@@ -389,6 +410,9 @@ deploy:
   script:
     - npx evd prepare
     - npx evd preDeploy
+    # 如需在 CI 中按流水线变量指定强制更新或最低支持版本：
+    # - npx evd preDeploy --min-supported-version 1.2.0
+    # - npx evd preDeploy --force-update
     - rsync -av --delete node_modules/.evd/ "$DEPLOY_TARGET"
     - npx evd verify
 ```
