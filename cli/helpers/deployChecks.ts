@@ -1,7 +1,14 @@
 import { EVDConfigType } from "@/types/EVDConfigType";
 import { confirm } from "@inquirer/prompts";
-import { existsSync, readFileSync, rmSync, statSync, cpSync } from "node:fs";
-import { basename } from "node:path";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  statSync,
+  cpSync,
+} from "node:fs";
+import { basename, join } from "node:path";
 import logSymbols from "log-symbols";
 import { r } from "../utils";
 import { versionToNum } from "@/utils/versionToNum";
@@ -16,10 +23,132 @@ export type CheckPolicy = {
   allowNameMismatch: boolean;
   allowSameVersion: boolean;
   allowDowngrade: boolean;
+  allowMinVersionDowngrade: boolean;
   timeoutMs: number;
+  confirm?: (opts: { message: string }) => Promise<boolean>;
 };
 
 export const EVD_FOLDER = "node_modules/.evd";
+
+const STRICT_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
+export type MinVersionCLIOptions = {
+  minSupportedVersion?: string;
+  forceUpdate?: boolean;
+  noForceUpdate?: boolean;
+};
+
+export type ResolvedMinSupportedVersion = {
+  minSupportedVersion?: string;
+  source: "CLI" | "配置" | "未声明";
+  fromCLI: boolean;
+};
+
+export function extractMinVersionCLIOptions(
+  options: Record<string, any>,
+  rawArgs?: string[]
+): MinVersionCLIOptions {
+  if (!rawArgs) {
+    return {
+      minSupportedVersion: options.minSupportedVersion,
+      forceUpdate: options.forceUpdate,
+      noForceUpdate: options.forceUpdate === false,
+    };
+  }
+  const hasRawForceUpdate = rawArgs.includes("--force-update");
+  const hasRawNoForceUpdate = rawArgs.includes("--no-force-update");
+  const hasRawMinVersion = rawArgs.some(
+    (arg) =>
+      arg === "--min-supported-version" ||
+      arg.startsWith("--min-supported-version=")
+  );
+  return {
+    minSupportedVersion: hasRawMinVersion
+      ? options.minSupportedVersion
+      : undefined,
+    forceUpdate: hasRawForceUpdate
+      ? true
+      : hasRawNoForceUpdate
+      ? false
+      : undefined,
+    noForceUpdate: hasRawNoForceUpdate,
+  };
+}
+
+export function validateMinSupportedVersionValue(
+  minSupportedVersion: string,
+  localVersion: string
+) {
+  if (!STRICT_VERSION_RE.test(minSupportedVersion)) {
+    throw new Error(
+      `最低支持版本格式非法: "${minSupportedVersion}"，必须为 x.y.z 三段数字格式`
+    );
+  }
+  if (versionToNum(minSupportedVersion) > versionToNum(localVersion)) {
+    throw new Error(
+      `最低支持版本 ${minSupportedVersion} 不能高于当前待部署版本 ${localVersion}`
+    );
+  }
+}
+
+export function resolveMinSupportedVersion(
+  configs: Pick<EVDConfigType, "minSupportedVersion">,
+  localVersion: string,
+  cliOptions: MinVersionCLIOptions = {}
+): ResolvedMinSupportedVersion {
+  const hasMinVersion = cliOptions.minSupportedVersion !== undefined;
+  const hasForceUpdate = cliOptions.forceUpdate === true;
+  const hasNoForceUpdate =
+    cliOptions.noForceUpdate === true || cliOptions.forceUpdate === false;
+
+  if ([hasMinVersion, hasForceUpdate, hasNoForceUpdate].filter(Boolean).length > 1) {
+    throw new Error(
+      "--min-supported-version、--force-update 与 --no-force-update 互斥，不能同时使用"
+    );
+  }
+
+  if (hasNoForceUpdate) {
+    return { minSupportedVersion: undefined, source: "CLI", fromCLI: true };
+  }
+
+  let minSupportedVersion: string | undefined;
+  let source: "CLI" | "配置" | "未声明" = "未声明";
+  let fromCLI = false;
+
+  if (hasForceUpdate) {
+    minSupportedVersion = localVersion;
+    source = "CLI";
+    fromCLI = true;
+  } else if (hasMinVersion) {
+    minSupportedVersion = cliOptions.minSupportedVersion;
+    source = "CLI";
+    fromCLI = true;
+  } else if (configs.minSupportedVersion !== undefined) {
+    minSupportedVersion = configs.minSupportedVersion;
+    source = "配置";
+    fromCLI = false;
+  }
+
+  if (minSupportedVersion !== undefined) {
+    validateMinSupportedVersionValue(minSupportedVersion, localVersion);
+  }
+
+  return { minSupportedVersion, source, fromCLI };
+}
+
+export function applyMinSupportedVersion(
+  evdFolderPath: string,
+  minSupportedVersion?: string
+) {
+  const pkgPath = join(evdFolderPath, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  if (minSupportedVersion === undefined) {
+    delete pkg.minSupportedVersion;
+  } else {
+    pkg.minSupportedVersion = minSupportedVersion;
+  }
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), "utf-8");
+}
 
 export function createCheckPolicy(partial: Partial<CheckPolicy>): CheckPolicy {
   return {
@@ -28,6 +157,7 @@ export function createCheckPolicy(partial: Partial<CheckPolicy>): CheckPolicy {
     allowNameMismatch: false,
     allowSameVersion: false,
     allowDowngrade: false,
+    allowMinVersionDowngrade: false,
     timeoutMs: 10000,
     ...partial,
   };
@@ -36,13 +166,43 @@ export function createCheckPolicy(partial: Partial<CheckPolicy>): CheckPolicy {
 export async function runDeployChecks(
   configs: EVDConfigType,
   provider: ProviderInterface,
-  policy: CheckPolicy
-) {
+  policy: CheckPolicy,
+  cliMinVersionOptions: MinVersionCLIOptions = {}
+): Promise<ResolvedMinSupportedVersion> {
   checkEVDFolderExist();
   validateConfigs(configs, provider);
+
+  const compiledPackageJSON = JSON.parse(
+    readFileSync(r(`${EVD_FOLDER}/package.json`), "utf-8")
+  );
+  const resolvedMinVersion = resolveMinSupportedVersion(
+    configs,
+    compiledPackageJSON.version,
+    cliMinVersionOptions
+  );
+
+  console.log(
+    logSymbols.info,
+    `最低支持版本: ${resolvedMinVersion.minSupportedVersion ?? "未声明"} (来源: ${resolvedMinVersion.source})`
+  );
+
   const remotePKG = await checkRemotePackageJSON(configs, provider, policy);
-  if (remotePKG) await validateRemotePackageJSON(remotePKG, policy);
+  if (remotePKG) {
+    await validateRemotePackageJSON(remotePKG, policy, resolvedMinVersion);
+  }
+
+  if (policy.interactive && resolvedMinVersion.minSupportedVersion) {
+    const confirmFn = policy.confirm ?? confirm;
+    const confirmed = await confirmFn({
+      message: `低于 ${resolvedMinVersion.minSupportedVersion} 的客户端将被强制更新，确认继续吗？`,
+    });
+    if (!confirmed) throw new Error("部署已停止！");
+  }
+
   await deployExtraFolders(configs);
+  applyMinSupportedVersion(r(EVD_FOLDER), resolvedMinVersion.minSupportedVersion);
+
+  return resolvedMinVersion;
 }
 
 /**
@@ -60,7 +220,8 @@ async function gate(props: {
   const { statement, question, allowed, flag, policy } = props;
 
   if (policy.interactive) {
-    const answer = await confirm({ message: question });
+    const confirmFn = policy.confirm ?? confirm;
+    const answer = await confirmFn({ message: question });
     if (!answer) throw new Error("部署已停止！");
     return;
   }
@@ -112,7 +273,11 @@ async function checkRemotePackageJSON(
 /**
  * 检查远程的 package.json 是否符合标准
  */
-async function validateRemotePackageJSON(remotePKG: any, policy: CheckPolicy) {
+async function validateRemotePackageJSON(
+  remotePKG: any,
+  policy: CheckPolicy,
+  resolvedMinVersion: ResolvedMinSupportedVersion
+) {
   const compiledPackageJSON = JSON.parse(
     readFileSync(r(`${EVD_FOLDER}/package.json`), "utf-8")
   );
@@ -131,7 +296,8 @@ async function validateRemotePackageJSON(remotePKG: any, policy: CheckPolicy) {
     });
 
     if (policy.interactive) {
-      const answerDoubleCheck = await confirm({
+      const confirmFn = policy.confirm ?? confirm;
+      const answerDoubleCheck = await confirmFn({
         message: `确定继续执行吗？这将会覆盖远程的版本！`,
       });
       if (!answerDoubleCheck) throw new Error(`部署已停止`);
@@ -156,6 +322,24 @@ async function validateRemotePackageJSON(remotePKG: any, policy: CheckPolicy) {
       question: `检测到远程部署版本为 ${remotePKG.version} 大于当前版本 ${compiledPackageJSON.version}，确定要覆盖部署吗?`,
       allowed: policy.allowDowngrade,
       flag: "--allow-downgrade",
+      policy,
+    });
+  }
+
+  const remoteMin = remotePKG.minSupportedVersion;
+  const localMin = resolvedMinVersion.minSupportedVersion;
+  const isMinVersionDowngrade =
+    typeof remoteMin === "string" &&
+    remoteMin.length > 0 &&
+    (localMin === undefined || versionToNum(remoteMin) > versionToNum(localMin));
+
+  if (isMinVersionDowngrade && !resolvedMinVersion.fromCLI) {
+    const localMinLabel = localMin ?? "未声明";
+    await gate({
+      statement: `远程最低支持版本 ${remoteMin} 高于本次生效值 ${localMinLabel}`,
+      question: `检测到远程最低支持版本 ${remoteMin} 高于本次生效值 ${localMinLabel}，确定要降低或取消最低支持版本吗?`,
+      allowed: policy.allowMinVersionDowngrade,
+      flag: "--allow-min-version-downgrade",
       policy,
     });
   }

@@ -70,7 +70,7 @@ program
     }
   });
 
-async function runChecks(
+export async function runChecks(
   url: string,
   localPKG: any,
   timeoutMs: number
@@ -99,6 +99,17 @@ async function runChecks(
       label: "package.json",
       ok: false,
       detail: `version 不一致，远程 ${remotePKG.data.version}，本地 ${localPKG.version}`,
+    });
+  } else if (
+    (remotePKG.data.minSupportedVersion ?? null) !==
+    (localPKG.minSupportedVersion ?? null)
+  ) {
+    const remoteMin = remotePKG.data.minSupportedVersion ?? null;
+    const localMin = localPKG.minSupportedVersion ?? null;
+    results.push({
+      label: "package.json",
+      ok: false,
+      detail: `最低支持版本不一致，远程 ${remoteMin ?? "未声明"}，本地 ${localMin ?? "未声明"}`,
     });
   } else {
     results.push({

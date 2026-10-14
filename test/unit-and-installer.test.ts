@@ -22,6 +22,20 @@ import {
   toEVDError,
 } from "@/helpers/toEVDError";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
+import { createServer } from "node:http";
+import { program } from "commander";
+import extract from "extract-zip";
+import {
+  applyMinSupportedVersion,
+  createCheckPolicy,
+  extractMinVersionCLIOptions,
+  resolveMinSupportedVersion,
+  runDeployChecks,
+} from "../cli/helpers/deployChecks";
+import { getWhichProvider } from "../cli/helpers/getWhichProvider";
+import { copySourceAndZipFiles } from "../cli/commands/prepare";
+import { runChecks } from "../cli/commands/verify";
+import "../cli/commands/preDeploy";
 
 const assert = {
   ok(cond: unknown, msg = "Assertion failed") {
@@ -502,6 +516,690 @@ async function main() {
         try {
           chmodSync(join(targetDir, "b-locked.js"), 0o644);
         } catch (_) {}
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  console.log("\n=== 3. 最低支持版本解析、写入与远程生效校验测试 ===");
+
+  await runTest(
+    "resolveMinSupportedVersion: 参数优先级 (CLI > 配置 > 未声明)、三参数互斥、格式与上限校验",
+    () => {
+      assert.equal(
+        JSON.stringify(resolveMinSupportedVersion({}, "2.0.0", {})),
+        JSON.stringify({
+          minSupportedVersion: undefined,
+          source: "未声明",
+          fromCLI: false,
+        })
+      );
+
+      assert.equal(
+        JSON.stringify(
+          resolveMinSupportedVersion(
+            { minSupportedVersion: "1.2.0" },
+            "2.0.0",
+            {}
+          )
+        ),
+        JSON.stringify({
+          minSupportedVersion: "1.2.0",
+          source: "配置",
+          fromCLI: false,
+        })
+      );
+
+      assert.equal(
+        JSON.stringify(
+          resolveMinSupportedVersion(
+            { minSupportedVersion: "1.2.0" },
+            "2.0.0",
+            { minSupportedVersion: "1.5.0" }
+          )
+        ),
+        JSON.stringify({
+          minSupportedVersion: "1.5.0",
+          source: "CLI",
+          fromCLI: true,
+        })
+      );
+
+      assert.equal(
+        JSON.stringify(
+          resolveMinSupportedVersion(
+            { minSupportedVersion: "1.2.0" },
+            "2.0.0",
+            { forceUpdate: true }
+          )
+        ),
+        JSON.stringify({
+          minSupportedVersion: "2.0.0",
+          source: "CLI",
+          fromCLI: true,
+        })
+      );
+
+      assert.equal(
+        JSON.stringify(
+          resolveMinSupportedVersion(
+            { minSupportedVersion: "1.2.0" },
+            "2.0.0",
+            { forceUpdate: false }
+          )
+        ),
+        JSON.stringify({
+          minSupportedVersion: undefined,
+          source: "CLI",
+          fromCLI: true,
+        })
+      );
+
+      assert.throws(() =>
+        resolveMinSupportedVersion({}, "2.0.0", {
+          minSupportedVersion: "1.0.0",
+          forceUpdate: true,
+        })
+      );
+      assert.throws(() =>
+        resolveMinSupportedVersion({}, "2.0.0", {
+          minSupportedVersion: "1.0.0",
+          forceUpdate: false,
+        })
+      );
+      assert.throws(() =>
+        resolveMinSupportedVersion({}, "2.0.0", {
+          forceUpdate: true,
+          noForceUpdate: true,
+        })
+      );
+
+      for (const invalid of ["1.0", "v1.0.0", "1.0.0-beta.1", "abc", ""]) {
+        assert.throws(() =>
+          resolveMinSupportedVersion(
+            { minSupportedVersion: invalid },
+            "2.0.0",
+            {}
+          )
+        );
+      }
+
+      assert.throws(() =>
+        resolveMinSupportedVersion({}, "2.0.0", {
+          minSupportedVersion: "2.0.1",
+        })
+      );
+      assert.throws(() =>
+        resolveMinSupportedVersion(
+          { minSupportedVersion: "2.1.0" },
+          "2.0.0",
+          {}
+        )
+      );
+    }
+  );
+
+  await runTest(
+    "prepare & applyMinSupportedVersion: 写入 .evd/package.json、反复整形幂等、未声明删除该键、源与两个 zip 内 package.json 保持纯净",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-prepare-minver-"));
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({ name: "host-workspace", version: "1.0.0" })
+        );
+        mkdirSync(join(workDir, "node_modules", ".evd"), { recursive: true });
+
+        const appFolder = join(workDir, "compiled-app");
+        mkdirSync(join(appFolder, "node_modules", "dep-a"), {
+          recursive: true,
+        });
+        mkdirSync(join(appFolder, "dist"), { recursive: true });
+        writeFileSync(
+          join(appFolder, "node_modules", "dep-a", "index.js"),
+          "module.exports = 1;"
+        );
+        writeFileSync(join(appFolder, "dist", "main.js"), "console.log(1);");
+        const sourcePkgPath = join(appFolder, "package.json");
+        writeFileSync(
+          sourcePkgPath,
+          JSON.stringify({ name: "my-electron-app", version: "2.0.0" })
+        );
+
+        process.chdir(workDir);
+
+        await copySourceAndZipFiles({
+          compileCommand: "build",
+          changelogsPath: "CHANGELOG.md",
+          sources: {
+            folder: appFolder,
+            nodeModules: "node_modules",
+            codes: "dist",
+            packageJSON: "package.json",
+          },
+          selfHosted: { url: "https://cdn.example.com/app" },
+          minSupportedVersion: "1.2.0",
+          prebuiltConfig: {},
+        });
+
+        const evdFolder = join(workDir, "node_modules", ".evd");
+        const evdPkgPath = join(evdFolder, "package.json");
+        const evdPkg = JSON.parse(readFileSync(evdPkgPath, "utf-8"));
+        assert.equal(evdPkg.minSupportedVersion, "1.2.0");
+
+        const sourcePkgAfter = JSON.parse(readFileSync(sourcePkgPath, "utf-8"));
+        assert.equal("minSupportedVersion" in sourcePkgAfter, false);
+
+        const unzipFull = join(workDir, "unzip-full");
+        const unzipLogic = join(workDir, "unzip-logic");
+        await extract(join(evdFolder, "fullCode.zip"), { dir: unzipFull });
+        await extract(join(evdFolder, "logicCode.zip"), { dir: unzipLogic });
+
+        const fullZipPkg = JSON.parse(
+          readFileSync(join(unzipFull, "package.json"), "utf-8")
+        );
+        const logicZipPkg = JSON.parse(
+          readFileSync(join(unzipLogic, "package.json"), "utf-8")
+        );
+        assert.equal("minSupportedVersion" in fullZipPkg, false);
+        assert.equal("minSupportedVersion" in logicZipPkg, false);
+
+        applyMinSupportedVersion(evdFolder, "2.0.0");
+        assert.equal(
+          JSON.parse(readFileSync(evdPkgPath, "utf-8")).minSupportedVersion,
+          "2.0.0"
+        );
+
+        applyMinSupportedVersion(evdFolder, undefined);
+        const clearedPkg = JSON.parse(readFileSync(evdPkgPath, "utf-8"));
+        assert.equal("minSupportedVersion" in clearedPkg, false);
+
+        applyMinSupportedVersion(evdFolder, undefined);
+        const clearedAgainPkg = JSON.parse(readFileSync(evdPkgPath, "utf-8"));
+        assert.equal("minSupportedVersion" in clearedAgainPkg, false);
+
+        applyMinSupportedVersion(evdFolder, "1.5.0");
+        assert.equal(
+          JSON.parse(readFileSync(evdPkgPath, "utf-8")).minSupportedVersion,
+          "1.5.0"
+        );
+      } finally {
+        process.chdir(prevCwd);
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "runDeployChecks: 降级门禁 (CLI 显式参数免确认 / 配置或未声明需确认或 --allow-min-version-downgrade / --force 放行但不写入)、同版本沿用 --allow-same-version、打印来源与交互式二次确认",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-deploy-checks-"));
+      let remotePkgPayload: any = {
+        name: "my-electron-app",
+        version: "1.9.0",
+        minSupportedVersion: "1.5.0",
+      };
+
+      const server = createServer((req, res) => {
+        if (req.url?.startsWith("/package.json")) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(remotePkgPayload));
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const port = (server.address() as any).port;
+      const remoteUrl = `http://127.0.0.1:${port}`;
+
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({ name: "host-workspace", version: "1.0.0" })
+        );
+        const evdFolder = join(workDir, "node_modules", ".evd");
+        mkdirSync(evdFolder, { recursive: true });
+        const evdPkgPath = join(evdFolder, "package.json");
+        writeFileSync(
+          evdPkgPath,
+          JSON.stringify({ name: "my-electron-app", version: "2.0.0" })
+        );
+
+        process.chdir(workDir);
+
+        const makeConfigs = (minSupportedVersion?: string) => ({
+          compileCommand: "build",
+          changelogsPath: "CHANGELOG.md",
+          sources: {
+            folder: "dist",
+            nodeModules: "node_modules",
+            codes: "codes",
+            packageJSON: "package.json",
+          },
+          selfHosted: { url: remoteUrl },
+          ...(minSupportedVersion !== undefined
+            ? { minSupportedVersion }
+            : {}),
+          prebuiltConfig: {},
+        });
+
+        const provider = getWhichProvider(makeConfigs());
+
+        let downgradeErr: any;
+        try {
+          await runDeployChecks(
+            makeConfigs("1.2.0"),
+            provider,
+            createCheckPolicy({ interactive: false })
+          );
+        } catch (err) {
+          downgradeErr = err;
+        }
+        assert.ok(downgradeErr, "Should reject config minVersion downgrade");
+        assert.ok(
+          String(downgradeErr).includes("--allow-min-version-downgrade"),
+          `Expected --allow-min-version-downgrade in error, got: ${downgradeErr}`
+        );
+
+        let unsetDowngradeErr: any;
+        try {
+          await runDeployChecks(
+            makeConfigs(undefined),
+            provider,
+            createCheckPolicy({ interactive: false })
+          );
+        } catch (err) {
+          unsetDowngradeErr = err;
+        }
+        assert.ok(
+          unsetDowngradeErr,
+          "Should reject undeclared minVersion when remote has minSupportedVersion"
+        );
+        assert.ok(
+          String(unsetDowngradeErr).includes("--allow-min-version-downgrade")
+        );
+
+        await runDeployChecks(
+          makeConfigs(undefined),
+          provider,
+          createCheckPolicy({
+            interactive: false,
+            allowMinVersionDowngrade: true,
+          })
+        );
+        const pkgAfterForceAllow = JSON.parse(
+          readFileSync(evdPkgPath, "utf-8")
+        );
+        assert.equal(
+          "minSupportedVersion" in pkgAfterForceAllow,
+          false,
+          "--force / allowMinVersionDowngrade must not write minSupportedVersion when undeclared"
+        );
+
+        await runDeployChecks(
+          makeConfigs("1.5.0"),
+          provider,
+          createCheckPolicy({ interactive: false }),
+          { minSupportedVersion: "1.2.0" }
+        );
+        assert.equal(
+          JSON.parse(readFileSync(evdPkgPath, "utf-8")).minSupportedVersion,
+          "1.2.0",
+          "Explicit CLI --min-supported-version downgrade should pass without --allow-min-version-downgrade"
+        );
+
+        await runDeployChecks(
+          makeConfigs("1.5.0"),
+          provider,
+          createCheckPolicy({ interactive: false }),
+          { forceUpdate: false }
+        );
+        assert.equal(
+          "minSupportedVersion" in
+            JSON.parse(readFileSync(evdPkgPath, "utf-8")),
+          false,
+          "Explicit CLI --no-force-update should pass without --allow-min-version-downgrade and remove key"
+        );
+
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "2.0.0",
+          minSupportedVersion: "1.5.0",
+        };
+        let sameVerErr: any;
+        try {
+          await runDeployChecks(
+            makeConfigs("1.8.0"),
+            provider,
+            createCheckPolicy({ interactive: false })
+          );
+        } catch (err) {
+          sameVerErr = err;
+        }
+        assert.ok(sameVerErr, "Same version must require --allow-same-version");
+        assert.ok(String(sameVerErr).includes("--allow-same-version"));
+
+        await runDeployChecks(
+          makeConfigs("1.8.0"),
+          provider,
+          createCheckPolicy({ interactive: false, allowSameVersion: true })
+        );
+        assert.equal(
+          JSON.parse(readFileSync(evdPkgPath, "utf-8")).minSupportedVersion,
+          "1.8.0"
+        );
+
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "1.9.0",
+          minSupportedVersion: "1.8.0",
+        };
+        const promptedQuestions: string[] = [];
+        const capturedLogs: string[] = [];
+        const origLog = console.log;
+        console.log = (...args: unknown[]) => {
+          capturedLogs.push(args.map(String).join(" "));
+          origLog(...args);
+        };
+        try {
+          await runDeployChecks(
+            makeConfigs("1.5.0"),
+            provider,
+            createCheckPolicy({
+              interactive: true,
+              confirm: async ({ message }) => {
+                promptedQuestions.push(message);
+                return true;
+              },
+            })
+          );
+        } finally {
+          console.log = origLog;
+        }
+
+        assert.ok(
+          capturedLogs.some(
+            (l) => l.includes("1.5.0") && l.includes("配置")
+          ),
+          `Should log effective minSupportedVersion and source, got: ${capturedLogs.join(" | ")}`
+        );
+        assert.equal(
+          promptedQuestions.length,
+          2,
+          `Expected 2 interactive prompts (downgrade + force update confirm), got: ${JSON.stringify(promptedQuestions)}`
+        );
+        assert.ok(
+          promptedQuestions.some((q) =>
+            q.includes("低于 1.5.0 的客户端将被强制更新")
+          ),
+          `Expected secondary confirm prompt, got: ${JSON.stringify(promptedQuestions)}`
+        );
+      } finally {
+        process.chdir(prevCwd);
+        server.close();
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "verify runChecks: 比对 remote.minSupportedVersion ?? null 与本地值，不一致时输出「最低支持版本不一致，远程 X，本地 Y」",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-verify-minver-"));
+      let remotePkgPayload: any = {
+        name: "my-electron-app",
+        version: "2.0.0",
+        minSupportedVersion: "1.0.0",
+      };
+
+      const server = createServer((req, res) => {
+        if (req.url?.startsWith("/package.json")) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(remotePkgPayload));
+          return;
+        }
+        if (req.url?.startsWith("/changelog.json")) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ version: "2.0.0", changes: "<p>ok</p>" }));
+          return;
+        }
+        res.writeHead(200, { "Content-Length": "16" });
+        res.end("ok");
+      });
+
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const port = (server.address() as any).port;
+      const remoteUrl = `http://127.0.0.1:${port}`;
+
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({ name: "host-workspace", version: "1.0.0" })
+        );
+        mkdirSync(join(workDir, "node_modules", ".evd"), { recursive: true });
+        process.chdir(workDir);
+
+        const mismatchResults = await runChecks(
+          remoteUrl,
+          {
+            name: "my-electron-app",
+            version: "2.0.0",
+            minSupportedVersion: "1.2.0",
+          },
+          5000
+        );
+        const pkgCheck1 = mismatchResults.find(
+          (r) => r.label === "package.json"
+        );
+        assert.ok(pkgCheck1);
+        assert.equal(pkgCheck1!.ok, false);
+        assert.equal(
+          pkgCheck1!.detail,
+          "最低支持版本不一致，远程 1.0.0，本地 1.2.0"
+        );
+
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "2.0.0",
+        };
+        const undeclaredRemoteResults = await runChecks(
+          remoteUrl,
+          {
+            name: "my-electron-app",
+            version: "2.0.0",
+            minSupportedVersion: "1.2.0",
+          },
+          5000
+        );
+        const pkgCheck2 = undeclaredRemoteResults.find(
+          (r) => r.label === "package.json"
+        );
+        assert.ok(pkgCheck2);
+        assert.equal(pkgCheck2!.ok, false);
+        assert.ok(
+          pkgCheck2!.detail.startsWith("最低支持版本不一致，远程 ") &&
+            pkgCheck2!.detail.endsWith("，本地 1.2.0"),
+          `Unexpected detail: ${pkgCheck2!.detail}`
+        );
+
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "2.0.0",
+          minSupportedVersion: "1.2.0",
+        };
+        const matchResults = await runChecks(
+          remoteUrl,
+          {
+            name: "my-electron-app",
+            version: "2.0.0",
+            minSupportedVersion: "1.2.0",
+          },
+          5000
+        );
+        assert.equal(
+          matchResults.every((r) => r.ok),
+          true
+        );
+
+        assert.throws(() =>
+          resolveMinSupportedVersion(
+            {},
+            "2.0.0",
+            extractMinVersionCLIOptions({ forceUpdate: false }, [
+              "node",
+              "evd",
+              "preDeploy",
+              "--force-update",
+              "--no-force-update",
+            ])
+          )
+        );
+
+        writeFileSync(
+          join(workDir, "evd.config.js"),
+          `module.exports = ${JSON.stringify({
+            compileCommand: "build",
+            changelogsPath: "CHANGELOG.md",
+            sources: {
+              folder: "dist",
+              nodeModules: "node_modules",
+              codes: "codes",
+              packageJSON: "package.json",
+            },
+            selfHosted: { url: remoteUrl },
+            prebuiltConfig: {},
+          })};`
+        );
+        writeFileSync(
+          join(workDir, "node_modules", ".evd", "package.json"),
+          JSON.stringify({
+            name: "my-electron-app",
+            version: "2.0.0",
+            minSupportedVersion: "1.5.0",
+          })
+        );
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "2.0.0",
+          minSupportedVersion: "1.2.0",
+        };
+
+        let pkgFetchCount = 0;
+        server.on("request", (req) => {
+          if (req.url?.startsWith("/package.json")) pkgFetchCount++;
+        });
+
+        const prevExitCode = process.exitCode;
+        process.exitCode = 0;
+        await program.parseAsync([
+          "node",
+          "evd",
+          "verify",
+          "--retry",
+          "2",
+          "--retry-delay",
+          "0",
+        ]);
+        assert.equal(
+          process.exitCode,
+          1,
+          "verify should set process.exitCode = 1 when minSupportedVersion mismatches after retries"
+        );
+        assert.equal(
+          pkgFetchCount,
+          2,
+          "verify should retry --retry times on minSupportedVersion mismatch"
+        );
+
+        writeFileSync(
+          join(workDir, "node_modules", ".evd", "fullCode.zip"),
+          "dummy-zip"
+        );
+        remotePkgPayload = {
+          name: "my-electron-app",
+          version: "1.9.0",
+          minSupportedVersion: "1.5.0",
+        };
+
+        process.exitCode = 0;
+        await program.parseAsync([
+          "node",
+          "evd",
+          "preDeploy",
+          "--force-update",
+        ]);
+        assert.equal(process.exitCode, 0);
+        assert.equal(
+          JSON.parse(
+            readFileSync(
+              join(workDir, "node_modules", ".evd", "package.json"),
+              "utf-8"
+            )
+          ).minSupportedVersion,
+          "2.0.0"
+        );
+
+        process.exitCode = 0;
+        await program.parseAsync([
+          "node",
+          "evd",
+          "preDeploy",
+          "--min-supported-version",
+          "1.2.0",
+        ]);
+        assert.equal(process.exitCode, 0);
+        assert.equal(
+          JSON.parse(
+            readFileSync(
+              join(workDir, "node_modules", ".evd", "package.json"),
+              "utf-8"
+            )
+          ).minSupportedVersion,
+          "1.2.0"
+        );
+
+        process.exitCode = 0;
+        await program.parseAsync([
+          "node",
+          "evd",
+          "preDeploy",
+          "--no-force-update",
+        ]);
+        assert.equal(process.exitCode, 0);
+        assert.equal(
+          "minSupportedVersion" in
+            JSON.parse(
+              readFileSync(
+                join(workDir, "node_modules", ".evd", "package.json"),
+                "utf-8"
+              )
+            ),
+          false
+        );
+
+        process.exitCode = 0;
+        await program.parseAsync([
+          "node",
+          "evd",
+          "preDeploy",
+          "--force-update",
+          "--no-force-update",
+        ]);
+        assert.equal(
+          process.exitCode,
+          1,
+          "Mutually exclusive flags should exit with code 1"
+        );
+
+        process.exitCode = prevExitCode;
+      } finally {
+        process.chdir(prevCwd);
+        server.close();
         rmSync(workDir, { recursive: true, force: true });
       }
     }

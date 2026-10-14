@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { formatBytes, r } from "../utils";
 import { getWhichProvider } from "../helpers/getWhichProvider";
 import {
+  applyMinSupportedVersion,
   createCheckPolicy,
+  extractMinVersionCLIOptions,
   runDeployChecks,
   EVD_FOLDER,
 } from "../helpers/deployChecks";
@@ -22,18 +24,25 @@ program
   .option("--allow-name-mismatch", "允许本地与远程 package.json name 不一致")
   .option("--allow-same-version", "允许远程版本与本地一致")
   .option("--allow-downgrade", "允许远程版本高于本地")
+  .option(
+    "--allow-min-version-downgrade",
+    "允许降低或取消远程已有的最低支持版本"
+  )
   .option("--force", "等价于开启上面全部 --allow-* 参数")
+  .option("--min-supported-version <version>", "显式指定最低支持版本")
+  .option("--force-update", "将最低支持版本设为当前待部署版本")
+  .option("--no-force-update", "本次部署不声明最低支持版本")
   .option("--split", "强制拆分 fullCode.zip")
   .option("--no-split", "不拆分 fullCode.zip")
   .option("--timeout <ms>", "远程请求超时时间", "10000")
-  .action(async (options) => {
+  .action(async (options, command) => {
     try {
       const configs = await getConfigs();
       const provider = getWhichProvider(configs);
       console.log(logSymbols.info, `使用 provider: ${provider.name}`);
 
       const force = !!options.force;
-      await runDeployChecks(
+      const resolvedMinVersion = await runDeployChecks(
         configs,
         provider,
         createCheckPolicy({
@@ -42,8 +51,19 @@ program
           allowNameMismatch: force || !!options.allowNameMismatch,
           allowSameVersion: force || !!options.allowSameVersion,
           allowDowngrade: force || !!options.allowDowngrade,
+          allowMinVersionDowngrade:
+            force || !!options.allowMinVersionDowngrade,
           timeoutMs: Number(options.timeout),
-        })
+        }),
+        extractMinVersionCLIOptions(
+          options,
+          command?.parent?.rawArgs ?? process.argv
+        )
+      );
+
+      applyMinSupportedVersion(
+        r(EVD_FOLDER),
+        resolvedMinVersion.minSupportedVersion
       );
 
       const zipSplitOptions = resolveZipSplitOptions(

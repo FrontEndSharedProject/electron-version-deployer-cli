@@ -30,5 +30,7 @@ export default defineEVDConfig({
   //    thresholdMB: 24,
   //    chunkSizeMB: 20,
   //  },
+  //  最低支持版本（低于该版本的客户端将被强制更新）
+  //  minSupportedVersion: "1.0.0",
   prebuiltConfig: {},
 });
