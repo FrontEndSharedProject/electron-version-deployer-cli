@@ -531,7 +531,6 @@ async function main() {
         JSON.stringify({
           minSupportedVersion: undefined,
           source: "未声明",
-          fromCLI: false,
         })
       );
 
@@ -546,7 +545,6 @@ async function main() {
         JSON.stringify({
           minSupportedVersion: "1.2.0",
           source: "配置",
-          fromCLI: false,
         })
       );
 
@@ -561,7 +559,6 @@ async function main() {
         JSON.stringify({
           minSupportedVersion: "1.5.0",
           source: "CLI",
-          fromCLI: true,
         })
       );
 
@@ -576,7 +573,6 @@ async function main() {
         JSON.stringify({
           minSupportedVersion: "2.0.0",
           source: "CLI",
-          fromCLI: true,
         })
       );
 
@@ -591,7 +587,6 @@ async function main() {
         JSON.stringify({
           minSupportedVersion: undefined,
           source: "CLI",
-          fromCLI: true,
         })
       );
 

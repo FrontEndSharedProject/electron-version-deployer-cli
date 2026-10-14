@@ -395,10 +395,7 @@
       let errorDetailText = "";
 
       function applyForceUpdateMode(force) {
-        const isForce =
-          typeof force === "object" && force !== null
-            ? Boolean(force.forceUpdate)
-            : Boolean(force);
+        const isForce = Boolean(force);
         document.title = isForce ? "版本过低，必须安装新版本" : "有可用的更新";
         if (headerTitleSpanRef) {
           headerTitleSpanRef.textContent = isForce

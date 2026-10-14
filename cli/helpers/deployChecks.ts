@@ -41,7 +41,6 @@ export type MinVersionCLIOptions = {
 export type ResolvedMinSupportedVersion = {
   minSupportedVersion?: string;
   source: "CLI" | "配置" | "未声明";
-  fromCLI: boolean;
 };
 
 export function extractMinVersionCLIOptions(
@@ -108,32 +107,28 @@ export function resolveMinSupportedVersion(
   }
 
   if (hasNoForceUpdate) {
-    return { minSupportedVersion: undefined, source: "CLI", fromCLI: true };
+    return { minSupportedVersion: undefined, source: "CLI" };
   }
 
   let minSupportedVersion: string | undefined;
   let source: "CLI" | "配置" | "未声明" = "未声明";
-  let fromCLI = false;
 
   if (hasForceUpdate) {
     minSupportedVersion = localVersion;
     source = "CLI";
-    fromCLI = true;
   } else if (hasMinVersion) {
     minSupportedVersion = cliOptions.minSupportedVersion;
     source = "CLI";
-    fromCLI = true;
   } else if (configs.minSupportedVersion !== undefined) {
     minSupportedVersion = configs.minSupportedVersion;
     source = "配置";
-    fromCLI = false;
   }
 
   if (minSupportedVersion !== undefined) {
     validateMinSupportedVersionValue(minSupportedVersion, localVersion);
   }
 
-  return { minSupportedVersion, source, fromCLI };
+  return { minSupportedVersion, source };
 }
 
 export function applyMinSupportedVersion(
@@ -333,7 +328,7 @@ async function validateRemotePackageJSON(
     remoteMin.length > 0 &&
     (localMin === undefined || versionToNum(remoteMin) > versionToNum(localMin));
 
-  if (isMinVersionDowngrade && !resolvedMinVersion.fromCLI) {
+  if (isMinVersionDowngrade && resolvedMinVersion.source !== "CLI") {
     const localMinLabel = localMin ?? "未声明";
     await gate({
       statement: `远程最低支持版本 ${remoteMin} 高于本次生效值 ${localMinLabel}`,

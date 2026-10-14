@@ -6,7 +6,7 @@
 
 **前置:** 工作区中未提交的 `UpdateProgressTracker`、`isUpdating`、错误面板与 `test/electron-e2e.test.cjs` 脚手架需先提交为基线，本 ticket 依赖它们。
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## 与 01 共享的约定
 
@@ -34,12 +34,12 @@
 
 ## 验收
 
-- [ ] 本地版本低于合法的 `minSupportedVersion` 且远程版本更高时进入强制模式：窗口标题（含 `document.title`）与顶部提示为“版本过低，必须安装新版本”，`#skipBtn` 与 `#closeBtn` 文案为“退出软件”，`#retryBtn` 与 `#copyErrorBtn` 保留
-- [ ] `minSupportedVersion` 缺省、格式非法或本地版本不低于它时，保持普通更新原有标题、“稍后再提醒我”及关闭弹窗不退出应用的行为
-- [ ] 强制模式由主进程判定并通过可订阅的 IPC 下发；强制模式下主进程收到 `evd-skip` 即退出
-- [ ] 模板带 `evd-template-version` 标记；本地依赖目录中的模板版本不匹配或缺失标记时回退内嵌模板，匹配时沿用本地模板
-- [ ] 强制模式下，初始界面或错误面板点击“退出软件”、系统关闭按钮、precheck / 下载 / 解压阶段关闭弹窗，均调用 `app.exit(0)`
-- [ ] 强制模式下，`install` 阶段拦截弹窗关闭；更新成功后放行关闭并正常执行 `app.relaunch()`，不会提前退出
-- [ ] 强制模式下，宿主其它窗口全部关闭只剩弹窗时调用 `app.exit(0)`，而不是销毁弹窗
-- [ ] Electron 端到端测试覆盖：强制与普通两种模式的文案与按钮、旧模板回退、点击退出与关闭弹窗触发退出、`install` 阶段防关闭、更新成功后正常重启、只剩弹窗时退出
-- [ ] README 补充强制更新的客户端行为、模板协议版本回退，并说明 `app.exit(0)` 会跳过宿主的 `before-quit` / `will-quit` 收尾，以及旧客户端会忽略最低支持版本
+- [x] 本地版本低于合法的 `minSupportedVersion` 且远程版本更高时进入强制模式：窗口标题（含 `document.title`）与顶部提示为“版本过低，必须安装新版本”，`#skipBtn` 与 `#closeBtn` 文案为“退出软件”，`#retryBtn` 与 `#copyErrorBtn` 保留
+- [x] `minSupportedVersion` 缺省、格式非法或本地版本不低于它时，保持普通更新原有标题、“稍后再提醒我”及关闭弹窗不退出应用的行为
+- [x] 强制模式由主进程判定并通过可订阅的 IPC 下发；强制模式下主进程收到 `evd-skip` 即退出
+- [x] 模板带 `evd-template-version` 标记；本地依赖目录中的模板版本不匹配或缺失标记时回退内嵌模板，匹配时沿用本地模板
+- [x] 强制模式下，初始界面或错误面板点击“退出软件”、系统关闭按钮、precheck / 下载 / 解压阶段关闭弹窗，均调用 `app.exit(0)`
+- [x] 强制模式下，`install` 阶段拦截弹窗关闭；更新成功后放行关闭并正常执行 `app.relaunch()`，不会提前退出
+- [x] 强制模式下，宿主其它窗口全部关闭只剩弹窗时调用 `app.exit(0)`，而不是销毁弹窗
+- [x] Electron 端到端测试覆盖：强制与普通两种模式的文案与按钮、旧模板回退、点击退出与关闭弹窗触发退出、`install` 阶段防关闭、更新成功后正常重启、只剩弹窗时退出
+- [x] README 补充强制更新的客户端行为、模板协议版本回退，并说明 `app.exit(0)` 会跳过宿主的 `before-quit` / `will-quit` 收尾，以及旧客户端会忽略最低支持版本

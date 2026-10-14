@@ -4,7 +4,6 @@ import logSymbols from "log-symbols";
 import { r } from "../utils";
 import { getWhichProvider } from "../helpers/getWhichProvider";
 import {
-  applyMinSupportedVersion,
   createCheckPolicy,
   extractMinVersionCLIOptions,
   runDeployChecks,
@@ -25,7 +24,7 @@ program
       const configs = await getConfigs();
       const provider = getWhichProvider(configs);
 
-      const resolvedMinVersion = await runDeployChecks(
+      await runDeployChecks(
         configs,
         provider,
         createCheckPolicy({ interactive: true }),
@@ -33,11 +32,6 @@ program
           options,
           command?.parent?.rawArgs ?? process.argv
         )
-      );
-
-      applyMinSupportedVersion(
-        r(EVD_FOLDER),
-        resolvedMinVersion.minSupportedVersion
       );
 
       applyZipSplit(

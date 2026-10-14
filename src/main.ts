@@ -283,24 +283,15 @@ function watchHostWindowInForceMode(
   }
 }
 
-function handleForceBrowserWindowCreated(
-  _event: unknown,
-  window: BrowserWindow
-) {
-  if (
-    !isForceUpdate ||
-    !activePromptWindow ||
-    activePromptWindow.isDestroyed() ||
-    window === activePromptWindow ||
-    window.isDestroyed()
-  ) {
-    return;
+function exitAppIfForceUpdateNotInstalling(): boolean {
+  if (isUpdating && activeTracker?.state.stage === "install") {
+    return false;
   }
-  watchHostWindowInForceMode(window, activePromptWindow);
-  blockHostWindow(window, activePromptWindow);
+  app.exit(0);
+  return true;
 }
 
-function handleForceBrowserWindowFocus(_event: unknown, window: BrowserWindow) {
+function handleForceAppWindowEvent(_event: unknown, window: BrowserWindow) {
   if (
     !isForceUpdate ||
     !activePromptWindow ||
@@ -317,8 +308,8 @@ function handleForceBrowserWindowFocus(_event: unknown, window: BrowserWindow) {
 function removeForceWindowGuardListeners() {
   if (!isForceWindowGuardBound) return;
   isForceWindowGuardBound = false;
-  app.removeListener("browser-window-created", handleForceBrowserWindowCreated);
-  app.removeListener("browser-window-focus", handleForceBrowserWindowFocus);
+  app.removeListener("browser-window-created", handleForceAppWindowEvent);
+  app.removeListener("browser-window-focus", handleForceAppWindowEvent);
 }
 
 function applyForceUpdateWindowPolicy(promptWindow: BrowserWindow) {
@@ -327,8 +318,8 @@ function applyForceUpdateWindowPolicy(promptWindow: BrowserWindow) {
 
   if (!isForceWindowGuardBound) {
     isForceWindowGuardBound = true;
-    app.on("browser-window-created", handleForceBrowserWindowCreated);
-    app.on("browser-window-focus", handleForceBrowserWindowFocus);
+    app.on("browser-window-created", handleForceAppWindowEvent);
+    app.on("browser-window-focus", handleForceAppWindowEvent);
   }
 
   const allWindows = BrowserWindow.getAllWindows();
@@ -407,7 +398,6 @@ async function showNewVersionDialog(forceUpdate = false) {
         }
       });
 
-      //  解析模板路径：优先使用 node_modules 中的文件（向后兼容），不存在或协议版本不匹配则使用内嵌模板
       const appPath = app.getAppPath();
       const nodeModulesTemplatePath = join(
         appPath,
@@ -480,10 +470,7 @@ async function showNewVersionDialog(forceUpdate = false) {
           return;
         }
         event.preventDefault();
-        if (isUpdating && activeTracker?.state.stage === "install") {
-          return;
-        }
-        app.exit(0);
+        exitAppIfForceUpdateNotInstalling();
       });
 
       //  事件处理
@@ -1212,10 +1199,7 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
 
   ipcMain.on(EVDEventEnum.SKIP, (_) => {
     if (isForceUpdate) {
-      if (isUpdating && activeTracker?.state.stage === "install") {
-        return;
-      }
-      app.exit(0);
+      exitAppIfForceUpdateNotInstalling();
       return;
     }
     promptWindow.close();

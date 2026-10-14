@@ -6,7 +6,7 @@
 
 **前置:** 工作区中未提交的改动（含 `test/unit-and-installer.test.ts` 测试脚手架）需先提交为基线，worktree 中的 agent 才能拿到。
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## 与 02 共享的约定
 
@@ -42,12 +42,12 @@
 
 ## 验收
 
-- [ ] 部署配置类型与模板支持可选字段 `minSupportedVersion?: string`
-- [ ] `deploy` 与 `preDeploy` 支持 `--min-supported-version <version>`、`--force-update`、`--no-force-update`，三者互斥，优先级 CLI > 配置；`preDeploy --force` 不触发写入
-- [ ] `prepare` 按配置值写入 `.evd/package.json`；`deploy` / `preDeploy` 按最终生效值重写，生效值为未声明时删除该键；同一份产物带不同参数反复整形结果幂等；源 `sources.packageJSON` 与两个 zip 内的 `package.json` 均不含该字段
-- [ ] 格式非法、高于本次部署版本、互斥参数同时出现时报错并以非零状态退出
-- [ ] 生效值低于远程现值且非显式 CLI 参数时，交互模式确认、非交互模式需 `--allow-min-version-downgrade`（`--force` 包含）；同版本修改沿用 `--allow-same-version`
-- [ ] `deploy` / `preDeploy` 打印最终生效值及来源；交互式 `deploy` 在生效值存在时二次确认
-- [ ] `verify` 比对 `remote.minSupportedVersion ?? null` 与本地值，不一致时输出「最低支持版本不一致，远程 X，本地 Y」，计入失败项、参与 `--retry`，最终以非零状态退出
-- [ ] 单元与集成测试覆盖：参数优先级与互斥、格式与上限校验、降级门禁、写入幂等与归档纯净、远程校验一致性
-- [ ] README 补充配置项、三个 CLI 参数、`--allow-min-version-downgrade`、CI 示例，并说明不支持该字段的旧客户端会忽略它
+- [x] 部署配置类型与模板支持可选字段 `minSupportedVersion?: string`
+- [x] `deploy` 与 `preDeploy` 支持 `--min-supported-version <version>`、`--force-update`、`--no-force-update`，三者互斥，优先级 CLI > 配置；`preDeploy --force` 不触发写入
+- [x] `prepare` 按配置值写入 `.evd/package.json`；`deploy` / `preDeploy` 按最终生效值重写，生效值为未声明时删除该键；同一份产物带不同参数反复整形结果幂等；源 `sources.packageJSON` 与两个 zip 内的 `package.json` 均不含该字段
+- [x] 格式非法、高于本次部署版本、互斥参数同时出现时报错并以非零状态退出
+- [x] 生效值低于远程现值且非显式 CLI 参数时，交互模式确认、非交互模式需 `--allow-min-version-downgrade`（`--force` 包含）；同版本修改沿用 `--allow-same-version`
+- [x] `deploy` / `preDeploy` 打印最终生效值及来源；交互式 `deploy` 在生效值存在时二次确认
+- [x] `verify` 比对 `remote.minSupportedVersion ?? null` 与本地值，不一致时输出「最低支持版本不一致，远程 X，本地 Y」，计入失败项、参与 `--retry`，最终以非零状态退出
+- [x] 单元与集成测试覆盖：参数优先级与互斥、格式与上限校验、降级门禁、写入幂等与归档纯净、远程校验一致性
+- [x] README 补充配置项、三个 CLI 参数、`--allow-min-version-downgrade`、CI 示例，并说明不支持该字段的旧客户端会忽略它

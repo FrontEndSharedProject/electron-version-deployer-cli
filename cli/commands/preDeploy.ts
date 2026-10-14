@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { formatBytes, r } from "../utils";
 import { getWhichProvider } from "../helpers/getWhichProvider";
 import {
-  applyMinSupportedVersion,
   createCheckPolicy,
   extractMinVersionCLIOptions,
   runDeployChecks,
@@ -42,7 +41,7 @@ program
       console.log(logSymbols.info, `使用 provider: ${provider.name}`);
 
       const force = !!options.force;
-      const resolvedMinVersion = await runDeployChecks(
+      await runDeployChecks(
         configs,
         provider,
         createCheckPolicy({
@@ -59,11 +58,6 @@ program
           options,
           command?.parent?.rawArgs ?? process.argv
         )
-      );
-
-      applyMinSupportedVersion(
-        r(EVD_FOLDER),
-        resolvedMinVersion.minSupportedVersion
       );
 
       const zipSplitOptions = resolveZipSplitOptions(
