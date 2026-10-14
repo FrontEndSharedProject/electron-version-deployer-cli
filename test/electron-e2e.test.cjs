@@ -57,10 +57,22 @@ function createUpdateZip(zipFilePath, filesMap) {
 function startMockUpdateServer(zipPath, remotePkg, options = {}) {
   return new Promise((resolveServer) => {
     let currentRemotePkg = remotePkg;
+    const getActiveRemotePkg = () => {
+      if (
+        options.remotePkgFilePath &&
+        existsSync(options.remotePkgFilePath)
+      ) {
+        try {
+          return JSON.parse(readFileSync(options.remotePkgFilePath, "utf-8"));
+        } catch (_) {}
+      }
+      return currentRemotePkg;
+    };
     const server = http.createServer((req, res) => {
       const urlPath = (req.url || "").split("?")[0];
+      const activePkg = getActiveRemotePkg();
       if (urlPath === "/package.json") {
-        const body = JSON.stringify(currentRemotePkg);
+        const body = JSON.stringify(activePkg);
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
@@ -71,7 +83,7 @@ function startMockUpdateServer(zipPath, remotePkg, options = {}) {
       if (urlPath === "/changelog.json") {
         const body = JSON.stringify([
           {
-            version: currentRemotePkg.version,
+            version: activePkg.version,
             date: "2026-10-14",
             body: "<ul><li>新增全流程更新进度与错误诊断提示</li></ul>",
           },
@@ -134,6 +146,8 @@ function runElectronScenario(scenarioName, setupOptions) {
       dependencies: { foo: "1.0.0" },
       ...(setupOptions.remotePkgOverrides || {}),
     };
+    const remotePkgFilePath = join(tempBase, "remote-pkg.json");
+    writeFileSync(remotePkgFilePath, JSON.stringify(remotePkg, null, 2), "utf-8");
 
     await createUpdateZip(zipPath, {
       "package.json": JSON.stringify(remotePkg, null, 2),
@@ -145,7 +159,10 @@ function runElectronScenario(scenarioName, setupOptions) {
     const { server, url: remoteUrl } = await startMockUpdateServer(
       zipPath,
       remotePkg,
-      { downloadDelayMs: setupOptions.downloadDelayMs || 0 }
+      {
+        downloadDelayMs: setupOptions.downloadDelayMs || 0,
+        remotePkgFilePath,
+      }
     );
 
     writeFileSync(
@@ -198,11 +215,22 @@ const { EVDInit, EVDCheckUpdate } = require(${JSON.stringify(DIST_MAIN)});
 
 const RESULT_PATH = ${JSON.stringify(resultJsonPath)};
 const REMOTE_URL = ${JSON.stringify(remoteUrl)};
+const REMOTE_PKG_FILE_PATH = ${JSON.stringify(remotePkgFilePath)};
 const MAKE_APP_DIR_READONLY = ${JSON.stringify(
       !!setupOptions.makeAppDirReadonly
     )};
 const STUB_WIN_CLOSE = ${JSON.stringify(setupOptions.stubWinClose !== false)};
 const APP_DIR = ${JSON.stringify(appDir)};
+
+function setRemotePkg(overrides = {}) {
+  const nextPkg = {
+    name: "mock-evd-app",
+    version: "2.0.0",
+    dependencies: { foo: "1.0.0" },
+    ...overrides,
+  };
+  writeFileSync(REMOTE_PKG_FILE_PATH, JSON.stringify(nextPkg, null, 2), "utf-8");
+}
 
 let capturedOnError = null;
 let relaunchCalled = false;
@@ -210,8 +238,14 @@ let exitIntercepted = false;
 const exitCalls = [];
 const lifecycleOrder = [];
 let onBeforeInstallHook = null;
+let lastFocusedWindow = null;
+const focusHistory = [];
 
 const origExit = app.exit.bind(app);
+const origHide = BrowserWindow.prototype.hide;
+const origSetSkipTaskbar = BrowserWindow.prototype.setSkipTaskbar;
+const origSetEnabled = BrowserWindow.prototype.setEnabled;
+
 app.relaunch = () => {
   relaunchCalled = true;
   lifecycleOrder.push("relaunch");
@@ -221,9 +255,52 @@ app.exit = (code) => {
   exitCalls.push(code);
   lifecycleOrder.push("exit:" + String(code));
 };
-// 静默窗口展示，避免自动化测试期间弹窗闪烁
-BrowserWindow.prototype.show = function () {};
-BrowserWindow.prototype.focus = function () {};
+// 静默窗口展示，避免自动化测试期间弹窗闪烁，同时记录可见性与焦点状态并派发事件
+BrowserWindow.prototype.show = function () {
+  this.__testVisible = true;
+  this.__testShowCalls = (this.__testShowCalls || 0) + 1;
+  this.emit("show");
+};
+BrowserWindow.prototype.showInactive = function () {
+  this.__testVisible = true;
+  this.__testShowInactiveCalls = (this.__testShowInactiveCalls || 0) + 1;
+  this.emit("show");
+};
+BrowserWindow.prototype.hide = function () {
+  this.__testVisible = false;
+  this.__testHideCalls = (this.__testHideCalls || 0) + 1;
+  if (typeof origHide === "function") {
+    origHide.call(this);
+  }
+  this.emit("hide");
+};
+BrowserWindow.prototype.isVisible = function () {
+  return Boolean(this.__testVisible);
+};
+BrowserWindow.prototype.focus = function () {
+  this.__testFocusCalls = (this.__testFocusCalls || 0) + 1;
+  lastFocusedWindow = this;
+  focusHistory.push(this.id);
+};
+BrowserWindow.prototype.setSkipTaskbar = function (skip) {
+  this.__testSkipTaskbar = Boolean(skip);
+  this.__testSkipTaskbarCalls = this.__testSkipTaskbarCalls || [];
+  this.__testSkipTaskbarCalls.push(Boolean(skip));
+  if (typeof origSetSkipTaskbar === "function") {
+    origSetSkipTaskbar.call(this, skip);
+  }
+};
+BrowserWindow.prototype.setEnabled = function (enable) {
+  this.__testEnabled = Boolean(enable);
+  this.__testSetEnabledCalls = this.__testSetEnabledCalls || [];
+  this.__testSetEnabledCalls.push(Boolean(enable));
+  if (typeof origSetEnabled === "function") {
+    origSetEnabled.call(this, enable);
+  }
+};
+BrowserWindow.prototype.isEnabled = function () {
+  return this.__testEnabled === undefined ? true : Boolean(this.__testEnabled);
+};
 app.on("window-all-closed", () => {});
 
 app.whenReady().then(async () => {
@@ -254,6 +331,8 @@ app.whenReady().then(async () => {
       chmodSync(APP_DIR, 0o555);
     }
 
+    ${setupOptions.beforeInitialCheckScript || ""}
+
     const hasUpdate = await EVDCheckUpdate();
 
     // 等待弹窗 BrowserWindow 创建且页面 DOM 完全加载就绪
@@ -266,20 +345,20 @@ app.whenReady().then(async () => {
             return;
           }
           const wins = BrowserWindow.getAllWindows();
-          if (wins.length > 0) {
-            const win = wins[wins.length - 1];
-            if (!win.__origClose) {
-              win.__origClose = win.close.bind(win);
-            }
-            if (STUB_WIN_CLOSE) {
-              // 阻止成功更新后 1ms 自动关闭销毁窗口，以便读取最终 DOM 状态
-              win.close = () => {};
-            }
+          for (const win of wins) {
+            if (win.__isTestHostWin || win.isDestroyed()) continue;
             try {
               const ready = await win.webContents.executeJavaScript(
                 "Boolean(document.querySelector('#updateBtn') && document.querySelector('#stagePercent'))"
               );
               if (ready) {
+                if (!win.__origClose) {
+                  win.__origClose = win.close.bind(win);
+                }
+                if (STUB_WIN_CLOSE) {
+                  // 阻止成功更新后 1ms 自动关闭销毁窗口，以便读取最终 DOM 状态
+                  win.close = () => {};
+                }
                 res(win);
                 return;
               }
@@ -1016,6 +1095,419 @@ async function main() {
 
     console.log(
       `✅ PASS (${Date.now() - start}ms): E2E 场景 8 - 强制更新下宿主其它窗口全部关闭只剩弹窗时调用 app.exit(0) 且不销毁弹窗`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: darwinBlockRes } = await runElectronScenario(
+      "force-initial-block-darwin",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        beforeInitialCheckScript: `
+          Object.defineProperty(process, "platform", {
+            value: "darwin",
+            configurable: true,
+          });
+          const hostWin1 = new BrowserWindow({ show: false });
+          hostWin1.__isTestHostWin = true;
+          hostWin1.show();
+          const hostWin2 = new BrowserWindow({ show: false });
+          hostWin2.__isTestHostWin = true;
+          hostWin2.show();
+        `,
+        customActionScript: `
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              dialogSkipTaskbar: dialogWin.__testSkipTaskbar,
+              dialogSkipTaskbarCalls: dialogWin.__testSkipTaskbarCalls || [],
+              hostWin1Visible: hostWin1.isVisible(),
+              hostWin2Visible: hostWin2.isVisible(),
+              hostWin1HideCalls: hostWin1.__testHideCalls || 0,
+              hostWin2HideCalls: hostWin2.__testHideCalls || 0,
+              hostWin1SetEnabledCalls: hostWin1.__testSetEnabledCalls || [],
+              hostWin2SetEnabledCalls: hostWin2.__testSetEnabledCalls || [],
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertEqual(
+      darwinBlockRes.dialogSkipTaskbar,
+      false,
+      "强制模式下弹窗 skipTaskbar 应设为 false"
+    );
+    assertOk(
+      darwinBlockRes.dialogSkipTaskbarCalls.includes(false),
+      "强制模式下应调用 setSkipTaskbar(false)"
+    );
+    assertEqual(
+      darwinBlockRes.hostWin1Visible,
+      false,
+      "进入强制模式时应隐藏现有主窗口 1"
+    );
+    assertEqual(
+      darwinBlockRes.hostWin2Visible,
+      false,
+      "进入强制模式时应隐藏现有主窗口 2"
+    );
+    assertOk(darwinBlockRes.hostWin1HideCalls >= 1);
+    assertOk(darwinBlockRes.hostWin2HideCalls >= 1);
+    assertEqual(
+      darwinBlockRes.hostWin1SetEnabledCalls.length,
+      0,
+      "macOS 平台不应调用 setEnabled(false)"
+    );
+    assertEqual(
+      darwinBlockRes.hostWin2SetEnabledCalls.length,
+      0,
+      "macOS 平台不应调用 setEnabled(false)"
+    );
+
+    const { result: nonDarwinBlockRes } = await runElectronScenario(
+      "force-initial-block-non-darwin",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        beforeInitialCheckScript: `
+          Object.defineProperty(process, "platform", {
+            value: "win32",
+            configurable: true,
+          });
+          const hostWin1 = new BrowserWindow({ show: false });
+          hostWin1.__isTestHostWin = true;
+          hostWin1.show();
+          const hostWin2 = new BrowserWindow({ show: false });
+          hostWin2.__isTestHostWin = true;
+          hostWin2.show();
+        `,
+        customActionScript: `
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              dialogSkipTaskbar: dialogWin.__testSkipTaskbar,
+              hostWin1Visible: hostWin1.isVisible(),
+              hostWin2Visible: hostWin2.isVisible(),
+              hostWin1Enabled: hostWin1.isEnabled(),
+              hostWin2Enabled: hostWin2.isEnabled(),
+              hostWin1SetEnabledCalls: hostWin1.__testSetEnabledCalls || [],
+              hostWin2SetEnabledCalls: hostWin2.__testSetEnabledCalls || [],
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertEqual(nonDarwinBlockRes.dialogSkipTaskbar, false);
+    assertEqual(nonDarwinBlockRes.hostWin1Visible, false);
+    assertEqual(nonDarwinBlockRes.hostWin2Visible, false);
+    assertEqual(
+      nonDarwinBlockRes.hostWin1Enabled,
+      false,
+      "非 macOS 平台应同步对现有窗口调用 setEnabled(false)"
+    );
+    assertEqual(
+      nonDarwinBlockRes.hostWin2Enabled,
+      false,
+      "非 macOS 平台应同步对现有窗口调用 setEnabled(false)"
+    );
+    assertOk(nonDarwinBlockRes.hostWin1SetEnabledCalls.includes(false));
+    assertOk(nonDarwinBlockRes.hostWin2SetEnabledCalls.includes(false));
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 9 - 强制模式设置 skipTaskbar(false) 并隐藏全部现有非弹窗窗口（非 macOS 补充 setEnabled(false)）`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: interceptRes } = await runElectronScenario(
+      "force-anti-wakeup-interception",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        beforeInitialCheckScript: `
+          const hostWin = new BrowserWindow({ show: false });
+          hostWin.__isTestHostWin = true;
+          hostWin.show();
+        `,
+        customActionScript: `
+          const records = {};
+
+          const snap = (targetWin, prevHideCalls, prevDialogFocusCalls) => ({
+            visible: targetWin.isVisible(),
+            hideDelta: (targetWin.__testHideCalls || 0) - prevHideCalls,
+            dialogFocusDelta: (dialogWin.__testFocusCalls || 0) - prevDialogFocusCalls,
+            lastFocusedIsDialog: lastFocusedWindow === dialogWin,
+          });
+
+          let hHide = hostWin.__testHideCalls || 0;
+          let dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = hostWin;
+          hostWin.show();
+          records.existingShow = snap(hostWin, hHide, dFocus);
+
+          hHide = hostWin.__testHideCalls || 0;
+          dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = hostWin;
+          hostWin.showInactive();
+          records.existingShowInactive = snap(hostWin, hHide, dFocus);
+
+          hHide = hostWin.__testHideCalls || 0;
+          dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = hostWin;
+          app.emit("browser-window-focus", {}, hostWin);
+          records.existingFocusFallback = snap(hostWin, hHide, dFocus);
+
+          dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = hostWin;
+          const lateWin = new BrowserWindow({ show: false });
+          lateWin.__isTestHostWin = true;
+          records.newWinCreated = snap(lateWin, 0, dFocus);
+
+          hHide = lateWin.__testHideCalls || 0;
+          dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = lateWin;
+          lateWin.show();
+          records.newWinShow = snap(lateWin, hHide, dFocus);
+
+          hHide = lateWin.__testHideCalls || 0;
+          dFocus = dialogWin.__testFocusCalls || 0;
+          lastFocusedWindow = lateWin;
+          lateWin.showInactive();
+          records.newWinShowInactive = snap(lateWin, hHide, dFocus);
+
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({ records }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    for (const [caseName, rec] of Object.entries(interceptRes.records)) {
+      assertEqual(
+        rec.visible,
+        false,
+        `强制模式拦截路径 [${caseName}] 应将非弹窗窗口隐藏`
+      );
+      assertOk(
+        rec.hideDelta >= 1,
+        `强制模式拦截路径 [${caseName}] 应调用目标窗口 hide()，实际 hideDelta=${rec.hideDelta}`
+      );
+      assertOk(
+        rec.dialogFocusDelta >= 1,
+        `强制模式拦截路径 [${caseName}] 应调用弹窗 focus()，实际 dialogFocusDelta=${rec.dialogFocusDelta}`
+      );
+      assertEqual(
+        rec.lastFocusedIsDialog,
+        true,
+        `强制模式拦截路径 [${caseName}] 最终焦点应回到更新弹窗`
+      );
+    }
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 10 - 强制模式期间现有窗口 show/showInactive/聚焦 与新建窗口（含 show:false 后再显示）均自动隐藏并聚焦回弹窗`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: upgradeRes } = await runElectronScenario(
+      "live-upgrade-optional-to-force-and-no-downgrade",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: {},
+        lockTargetFile: true,
+        stubWinClose: false,
+        beforeInitialCheckScript: `
+          const hostWin = new BrowserWindow({ show: false });
+          hostWin.__isTestHostWin = true;
+          hostWin.show();
+        `,
+        customActionScript: `
+          const readDialogUI = async () => {
+            const dom = await dialogWin.webContents.executeJavaScript(\`({
+              documentTitle: document.title,
+              headerText: document.querySelector(".title-bar span")?.textContent || "",
+              skipBtnText: document.querySelector("#skipBtn")?.textContent || "",
+              closeBtnText: document.querySelector("#closeBtn")?.textContent || "",
+              errorVisible: document.querySelector(".error-box")?.style.display === "flex",
+            })\`);
+            dom.windowTitle = dialogWin.getTitle();
+            dom.skipTaskbar = dialogWin.__testSkipTaskbar;
+            dom.hostWinVisible = hostWin.isVisible();
+            return dom;
+          };
+
+          const beforeUpgrade = await readDialogUI();
+
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#updateBtn').click()");
+          await new Promise((res, rej) => {
+            const deadline = Date.now() + 15000;
+            const waitErr = async () => {
+              if (Date.now() > deadline) return rej(new Error("Timed out waiting for error panel before live upgrade"));
+              try {
+                const visible = await dialogWin.webContents.executeJavaScript(
+                  "document.querySelector('.error-box').style.display === 'flex'"
+                );
+                if (visible) return res();
+              } catch (_) {}
+              setTimeout(waitErr, 50);
+            };
+            waitErr();
+          });
+
+          const onErrorPanelBeforeUpgrade = await readDialogUI();
+
+          setRemotePkg({ minSupportedVersion: "1.5.0" });
+          await EVDCheckUpdate();
+          await new Promise((r) => setTimeout(r, 80));
+
+          const afterUpgrade = await readDialogUI();
+
+          const prevHide = hostWin.__testHideCalls || 0;
+          const prevFocus = dialogWin.__testFocusCalls || 0;
+          hostWin.show();
+          const wakeAfterUpgrade = {
+            hostVisible: hostWin.isVisible(),
+            hideDelta: (hostWin.__testHideCalls || 0) - prevHide,
+            focusDelta: (dialogWin.__testFocusCalls || 0) - prevFocus,
+          };
+
+          const exitCountBeforeCloseBtn = exitCalls.length;
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#closeBtn').click()");
+          await new Promise((r) => setTimeout(r, 60));
+          const exitCallsOnErrorCloseBtn = exitCalls.slice(exitCountBeforeCloseBtn);
+
+          setRemotePkg({});
+          await EVDCheckUpdate();
+          await new Promise((r) => setTimeout(r, 80));
+
+          const afterRemoteRevert = await readDialogUI();
+
+          const prevHideRevert = hostWin.__testHideCalls || 0;
+          hostWin.showInactive();
+          const wakeAfterRevert = {
+            hostVisible: hostWin.isVisible(),
+            hideDelta: (hostWin.__testHideCalls || 0) - prevHideRevert,
+          };
+
+          const exitCountBeforeWinClose = exitCalls.length;
+          dialogWin.close();
+          const exitCallsAfterRevertWinClose = exitCalls.slice(exitCountBeforeWinClose);
+
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              beforeUpgrade,
+              onErrorPanelBeforeUpgrade,
+              afterUpgrade,
+              wakeAfterUpgrade,
+              exitCallsOnErrorCloseBtn,
+              afterRemoteRevert,
+              wakeAfterRevert,
+              exitCallsAfterRevertWinClose,
+              dialogDestroyed: dialogWin.isDestroyed(),
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertEqual(upgradeRes.beforeUpgrade.windowTitle, "有可用的更新");
+    assertEqual(upgradeRes.beforeUpgrade.skipBtnText, "稍后再提醒我");
+    assertEqual(upgradeRes.beforeUpgrade.closeBtnText, "关闭");
+    assertEqual(
+      upgradeRes.beforeUpgrade.hostWinVisible,
+      true,
+      "普通更新模式下主窗口应保持可见"
+    );
+    assertEqual(upgradeRes.onErrorPanelBeforeUpgrade.errorVisible, true);
+    assertEqual(upgradeRes.onErrorPanelBeforeUpgrade.closeBtnText, "关闭");
+
+    assertEqual(
+      upgradeRes.afterUpgrade.windowTitle,
+      "版本过低，必须安装新版本",
+      "原位升级后窗口标题应更新"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.documentTitle,
+      "版本过低，必须安装新版本",
+      "原位升级后 document.title 应更新"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.headerText,
+      "版本过低，必须安装新版本",
+      "原位升级后顶部提示应更新"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.skipBtnText,
+      "退出软件",
+      "原位升级后 #skipBtn 文案应变为退出软件"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.closeBtnText,
+      "退出软件",
+      "原位升级后错误面板 #closeBtn 文案应同步变为退出软件"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.skipTaskbar,
+      false,
+      "原位升级后应调用 setSkipTaskbar(false)"
+    );
+    assertEqual(
+      upgradeRes.afterUpgrade.hostWinVisible,
+      false,
+      "原位升级后应立即隐藏宿主其它窗口"
+    );
+    assertEqual(upgradeRes.wakeAfterUpgrade.hostVisible, false);
+    assertOk(upgradeRes.wakeAfterUpgrade.hideDelta >= 1);
+    assertOk(upgradeRes.wakeAfterUpgrade.focusDelta >= 1);
+    assertOk(
+      upgradeRes.exitCallsOnErrorCloseBtn.length >= 1 &&
+        upgradeRes.exitCallsOnErrorCloseBtn[0] === 0,
+      "原位升级后错误面板关闭规则应立即生效并调用 app.exit(0)"
+    );
+
+    assertEqual(
+      upgradeRes.afterRemoteRevert.windowTitle,
+      "版本过低，必须安装新版本",
+      "远程改回普通更新后应保持强制更新标题不回退"
+    );
+    assertEqual(
+      upgradeRes.afterRemoteRevert.documentTitle,
+      "版本过低，必须安装新版本"
+    );
+    assertEqual(upgradeRes.afterRemoteRevert.skipBtnText, "退出软件");
+    assertEqual(upgradeRes.afterRemoteRevert.closeBtnText, "退出软件");
+    assertEqual(upgradeRes.afterRemoteRevert.skipTaskbar, false);
+    assertEqual(upgradeRes.wakeAfterRevert.hostVisible, false);
+    assertOk(upgradeRes.wakeAfterRevert.hideDelta >= 1);
+    assertOk(
+      upgradeRes.exitCallsAfterRevertWinClose.length >= 1 &&
+        upgradeRes.exitCallsAfterRevertWinClose[0] === 0,
+      "远程改回普通更新后关闭弹窗仍应调用 app.exit(0)"
+    );
+    assertEqual(upgradeRes.dialogDestroyed, false);
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 11 - 普通更新弹窗原位升级为强制模式（含错误面板同步更新与窗口阻断）且远程改回普通更新时不回退`
     );
   }
 }

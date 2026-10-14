@@ -230,6 +230,8 @@ EVDCheckUpdate()
 当远程版本元数据（远程 `package.json`）中的 `version` 高于本地版本，且声明了合法的最低支持版本 `minSupportedVersion`（严格匹配 `x.y.z`），同时本地版本低于 `minSupportedVersion` 时，客户端自动进入**强制更新（Force Update）**模式；若未声明、格式非法或本地版本不低于 `minSupportedVersion`，则保持**普通更新（Optional Update）**行为。
 
 - **弹窗文案与按钮**：强制更新模式下，更新弹窗的窗口标题与顶部提示变为「版本过低，必须安装新版本」，初始界面与错误面板的关闭类按钮变为「退出软件」（错误面板的「重试」与「复制错误信息」按钮保持不变）。
+- **主窗口隐藏与防唤醒阻断**：进入强制更新模式时，更新弹窗会设为任务栏可见（`setSkipTaskbar(false)`），宿主应用中除更新弹窗外的全部窗口会被自动隐藏（`win.hide()`，非 macOS 平台同时调用 `win.setEnabled(false)` 禁用交互）。在强制更新期间，主进程持续监听现有窗口的 `show` 事件、`browser-window-created` 与 `browser-window-focus`，任何非弹窗窗口被重新显示（含 `show()` / `showInactive()`）、聚焦或新建时，均会被立即隐藏并将焦点切回更新弹窗。强制更新模式在同一会话内不可逆，仅以退出或更新后重启结束。
+- **在线弹窗原位升级**：若已打开普通更新弹窗，后续版本检查判定为强制更新模式时，现有弹窗会原位升级为强制更新模式（同步更新窗口标题、顶部提示、按钮文案与任务栏可见性，并立即隐藏和阻断宿主其它窗口），且同一会话内即使远程改回普通更新也保持强制更新模式。
 - **关闭即退出生命周期**：强制更新模式下，除 `install` 阶段（安装子进程正在覆盖本地文件）会拦截窗口关闭以防破坏安装目录、以及更新完成后的重启流程放行关闭并调用 `app.relaunch()` 外，其余任何阶段（初始界面、`precheck` 环境检查与等待 `onBeforeNewPkgInstall`、`download` 下载、`unzip` 解压、错误面板）点击「退出软件」、点击系统关闭按钮，或宿主其它窗口全部关闭只剩更新弹窗时，主进程均直接调用 `app.exit(0)` 退出应用。
 - **`app.exit(0)` 注意事项**：`app.exit(0)` 会直接终止进程，**跳过宿主应用的 `before-quit` / `will-quit` 收尾钩子**。需要在更新写入前释放的资源（如数据库连接、文件锁）请放在 `onBeforeNewPkgInstall` 中处理。
 - **模板协议版本回退**：弹窗模板带有 `<meta name="evd-template-version" content="1" />` 协议版本标记。当本地依赖目录 `node_modules/electron-version-deployer-cli/dist/templates/newVersionDialog.html` 缺失该标记或版本与主进程内置版本不匹配时，主进程自动回退到编译内嵌模板；版本一致时沿用本地模板。主进程作为强制模式的唯一权威，即便收到旧模板发出的 `evd-skip` 也会执行退出。

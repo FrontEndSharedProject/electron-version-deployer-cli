@@ -242,23 +242,125 @@ function isLocalTemplateCompatible(filePath: string): boolean {
   }
 }
 
+const watchedForceHostWindows = new WeakSet<BrowserWindow>();
+let isForceWindowGuardBound = false;
+
+function blockHostWindow(
+  hostWindow: BrowserWindow,
+  promptWindow: BrowserWindow
+) {
+  if (
+    !isForceUpdate ||
+    !hostWindow ||
+    hostWindow === promptWindow ||
+    hostWindow.isDestroyed()
+  ) {
+    return;
+  }
+  if (process.platform !== "darwin") {
+    hostWindow.setEnabled(false);
+  }
+  hostWindow.hide();
+  if (!promptWindow.isDestroyed()) {
+    promptWindow.focus();
+  }
+}
+
+function watchHostWindowInForceMode(
+  hostWindow: BrowserWindow,
+  promptWindow: BrowserWindow
+) {
+  if (!hostWindow || hostWindow === promptWindow || hostWindow.isDestroyed()) {
+    return;
+  }
+  if (!watchedForceHostWindows.has(hostWindow)) {
+    watchedForceHostWindows.add(hostWindow);
+    hostWindow.on("show", () => {
+      if (activePromptWindow && !activePromptWindow.isDestroyed()) {
+        blockHostWindow(hostWindow, activePromptWindow);
+      }
+    });
+  }
+}
+
+function handleForceBrowserWindowCreated(
+  _event: unknown,
+  window: BrowserWindow
+) {
+  if (
+    !isForceUpdate ||
+    !activePromptWindow ||
+    activePromptWindow.isDestroyed() ||
+    window === activePromptWindow ||
+    window.isDestroyed()
+  ) {
+    return;
+  }
+  watchHostWindowInForceMode(window, activePromptWindow);
+  blockHostWindow(window, activePromptWindow);
+}
+
+function handleForceBrowserWindowFocus(_event: unknown, window: BrowserWindow) {
+  if (
+    !isForceUpdate ||
+    !activePromptWindow ||
+    activePromptWindow.isDestroyed() ||
+    window === activePromptWindow ||
+    window.isDestroyed()
+  ) {
+    return;
+  }
+  watchHostWindowInForceMode(window, activePromptWindow);
+  blockHostWindow(window, activePromptWindow);
+}
+
+function removeForceWindowGuardListeners() {
+  if (!isForceWindowGuardBound) return;
+  isForceWindowGuardBound = false;
+  app.removeListener("browser-window-created", handleForceBrowserWindowCreated);
+  app.removeListener("browser-window-focus", handleForceBrowserWindowFocus);
+}
+
+function applyForceUpdateWindowPolicy(promptWindow: BrowserWindow) {
+  if (promptWindow.isDestroyed()) return;
+  promptWindow.setSkipTaskbar(false);
+
+  if (!isForceWindowGuardBound) {
+    isForceWindowGuardBound = true;
+    app.on("browser-window-created", handleForceBrowserWindowCreated);
+    app.on("browser-window-focus", handleForceBrowserWindowFocus);
+  }
+
+  const allWindows = BrowserWindow.getAllWindows();
+  allWindows.forEach((window) => {
+    if (window === promptWindow || window.isDestroyed()) {
+      return;
+    }
+    watchHostWindowInForceMode(window, promptWindow);
+    blockHostWindow(window, promptWindow);
+  });
+}
+
 async function showNewVersionDialog(forceUpdate = false) {
   const { windowHeight, windowWidth, onError } = getConfigs();
 
-  app.whenReady().then(async () => {
+  await app.whenReady().then(async () => {
     try {
       if (activePromptWindow && !activePromptWindow.isDestroyed()) {
         if (forceUpdate && !isForceUpdate) {
           isForceUpdate = true;
           activePromptWindow.setTitle(FORCE_UPDATE_TITLE);
           notifyForceUpdateMode(activePromptWindow, true);
+          applyForceUpdateWindowPolicy(activePromptWindow);
         }
         activePromptWindow.show();
         activePromptWindow.focus();
         return;
       }
 
-      isForceUpdate = forceUpdate;
+      if (forceUpdate) {
+        isForceUpdate = true;
+      }
       isRelaunching = false;
       const initialTitle = isForceUpdate
         ? FORCE_UPDATE_TITLE
@@ -274,7 +376,7 @@ async function showNewVersionDialog(forceUpdate = false) {
         minimizable: false,
         fullscreenable: false,
         maximizable: false,
-        skipTaskbar: true,
+        skipTaskbar: !isForceUpdate,
         //  windows 11 如果设置为 true 会导致点击后马上消失
         alwaysOnTop: platform !== "win32",
         useContentSize: false,
@@ -287,6 +389,10 @@ async function showNewVersionDialog(forceUpdate = false) {
       });
 
       activePromptWindow = promptWindow;
+
+      if (isForceUpdate) {
+        applyForceUpdateWindowPolicy(promptWindow);
+      }
 
       promptWindow.setMenu(null);
       promptWindow.setMenuBarVisibility(false);
@@ -1265,6 +1371,7 @@ function notifyUpdateError(
 
 function cleanup(promptWindow: BrowserWindow) {
   removeUpdateIpcListeners();
+  removeForceWindowGuardListeners();
   if (activeTracker) {
     activeTracker.stop();
     activeTracker = null;
