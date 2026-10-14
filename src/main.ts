@@ -58,6 +58,10 @@ const INSTALLER_DONE_MESSAGE = "exitManually";
 const INSTALLER_FAILED_PREFIX = "installFailed:";
 const STALL_THRESHOLD_MS = 10000;
 const PROGRESS_IPC_THROTTLE_MS = 80;
+const OPTIONAL_UPDATE_TITLE = "有可用的更新";
+const FORCE_UPDATE_TITLE = "版本过低，必须安装新版本";
+const SEMVER_EXACT_RE = /^\d+\.\d+\.\d+$/;
+const EVD_TEMPLATE_VERSION = 1;
 
 export enum EVDEventEnum {
   OPEN_LINK = "evd-open-link",
@@ -68,6 +72,8 @@ export enum EVDEventEnum {
   GET_CHANGELOGS_LINK = "evd-get-changelogs-link",
   UPDATE_ERROR = "evd-update-error",
   UPDATE_PROGRESS = "evd-update-progress",
+  GET_FORCE_UPDATE = "evd-get-force-update",
+  FORCE_UPDATE_CHANGE = "evd-force-update-change",
 }
 
 export type EVDUpdateStageType =
@@ -128,7 +134,21 @@ let globalArgs: EVDInitPropsType | null = null;
 let cacheChangelogs: any = null;
 let cacheCurrentPkgJSON: any = null;
 let activePromptWindow: BrowserWindow | null = null;
+let activeTracker: UpdateProgressTracker | null = null;
 let isUpdating = false;
+let isForceUpdate = false;
+let isRelaunching = false;
+
+function shouldForceUpdate(localVersionStr: string, remoteJSON: any): boolean {
+  const minSupportedVersion = remoteJSON?.minSupportedVersion;
+  if (
+    typeof minSupportedVersion !== "string" ||
+    !SEMVER_EXACT_RE.test(minSupportedVersion)
+  ) {
+    return false;
+  }
+  return versionToNum(localVersionStr) < versionToNum(minSupportedVersion);
+}
 
 export function EVDInit(props: EVDInitPropsType) {
   //  废弃参数检测
@@ -190,23 +210,59 @@ export async function EVDCheckUpdate() {
   const remoteVersion = versionToNum(remoteJSON.version);
 
   if (remoteVersion > localVersion) {
-    await showNewVersionDialog();
+    const forceUpdate = shouldForceUpdate(version, remoteJSON);
+    await showNewVersionDialog(forceUpdate);
     return true;
   } else {
     return false;
   }
 }
 
-async function showNewVersionDialog() {
+function parseTemplateVersion(html: string): number | null {
+  const match =
+    html.match(
+      /<meta\b[^>]*\bname=["']evd-template-version["'][^>]*\bcontent=["']([^"']+)["'][^>]*>/i
+    ) ||
+    html.match(
+      /<meta\b[^>]*\bcontent=["']([^"']+)["'][^>]*\bname=["']evd-template-version["'][^>]*>/i
+    );
+  if (!match) return null;
+  const raw = match[1].trim();
+  if (!/^\d+$/.test(raw)) return null;
+  return Number(raw);
+}
+
+function isLocalTemplateCompatible(filePath: string): boolean {
+  try {
+    if (!existsSync(filePath)) return false;
+    const html = readFileSync(filePath, "utf-8");
+    return parseTemplateVersion(html) === EVD_TEMPLATE_VERSION;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function showNewVersionDialog(forceUpdate = false) {
   const { windowHeight, windowWidth, onError } = getConfigs();
 
   app.whenReady().then(async () => {
     try {
       if (activePromptWindow && !activePromptWindow.isDestroyed()) {
+        if (forceUpdate && !isForceUpdate) {
+          isForceUpdate = true;
+          activePromptWindow.setTitle(FORCE_UPDATE_TITLE);
+          notifyForceUpdateMode(activePromptWindow, true);
+        }
         activePromptWindow.show();
         activePromptWindow.focus();
         return;
       }
+
+      isForceUpdate = forceUpdate;
+      isRelaunching = false;
+      const initialTitle = isForceUpdate
+        ? FORCE_UPDATE_TITLE
+        : OPTIONAL_UPDATE_TITLE;
 
       let promptWindow = new BrowserWindow({
         frame: true,
@@ -222,7 +278,7 @@ async function showNewVersionDialog() {
         //  windows 11 如果设置为 true 会导致点击后马上消失
         alwaysOnTop: platform !== "win32",
         useContentSize: false,
-        title: "有可用的更新",
+        title: initialTitle,
         webPreferences: {
           nodeIntegration: true,
           contextIsolation: false,
@@ -234,8 +290,18 @@ async function showNewVersionDialog() {
 
       promptWindow.setMenu(null);
       promptWindow.setMenuBarVisibility(false);
+      //  模板 <title> 会触发 page-title-updated 覆盖构造参数中的 title
+      promptWindow.on("page-title-updated", (event, title) => {
+        const expectedTitle = isForceUpdate
+          ? FORCE_UPDATE_TITLE
+          : OPTIONAL_UPDATE_TITLE;
+        if (title !== expectedTitle) {
+          event.preventDefault();
+          promptWindow.setTitle(expectedTitle);
+        }
+      });
 
-      //  解析模板路径：优先使用 node_modules 中的文件（向后兼容），不存在则使用内嵌模板
+      //  解析模板路径：优先使用 node_modules 中的文件（向后兼容），不存在或协议版本不匹配则使用内嵌模板
       const appPath = app.getAppPath();
       const nodeModulesTemplatePath = join(
         appPath,
@@ -246,7 +312,7 @@ async function showNewVersionDialog() {
         "newVersionDialog.html"
       );
       let templatePath: string;
-      if (existsSync(nodeModulesTemplatePath)) {
+      if (isLocalTemplateCompatible(nodeModulesTemplatePath)) {
         templatePath = nodeModulesTemplatePath;
       } else {
         templatePath = join(appPath, "_evdDialogTemplate.html");
@@ -271,22 +337,47 @@ async function showNewVersionDialog() {
       promptWindow.once("ready-to-show", () => {
         promptWindow.show();
 
-        setTimeout(() => {
+        const watchedHostWindows = new WeakSet<BrowserWindow>();
+        const bindHostWindowsClosed = () => {
           const allWindows = BrowserWindow.getAllWindows();
           // 遍历每个窗口实例，并添加 'closed' 事件监听器
           allWindows.forEach((window) => {
+            if (window === promptWindow || watchedHostWindows.has(window)) {
+              return;
+            }
+            watchedHostWindows.add(window);
             window.on("closed", () => {
               //  如果只剩下一个窗口，关闭自己
-              if (BrowserWindow.getAllWindows().length == 1) {
-                cleanup(promptWindow);
+              if (
+                !promptWindow.isDestroyed() &&
+                BrowserWindow.getAllWindows().length == 1
+              ) {
+                if (isForceUpdate) {
+                  if (!isRelaunching) {
+                    app.exit(0);
+                  }
+                } else {
+                  cleanup(promptWindow);
+                }
               }
             });
           });
-        }, 1000);
+        };
+
+        bindHostWindowsClosed();
+        setTimeout(bindHostWindowsClosed, 1000);
       });
 
-      promptWindow.once("close", () => {
-        cleanup(promptWindow);
+      promptWindow.on("close", (event) => {
+        if (!isForceUpdate || isRelaunching) {
+          cleanup(promptWindow);
+          return;
+        }
+        event.preventDefault();
+        if (isUpdating && activeTracker?.state.stage === "install") {
+          return;
+        }
+        app.exit(0);
       });
 
       //  事件处理
@@ -988,6 +1079,20 @@ function removeUpdateIpcListeners() {
   ipcMain.removeHandler(EVDEventEnum.GET_CHANGELOGS);
   ipcMain.removeHandler(EVDEventEnum.GET_LOGO);
   ipcMain.removeHandler(EVDEventEnum.GET_CHANGELOGS_LINK);
+  ipcMain.removeHandler(EVDEventEnum.GET_FORCE_UPDATE);
+}
+
+function notifyForceUpdateMode(
+  promptWindow: BrowserWindow,
+  forceUpdate: boolean
+) {
+  try {
+    if (promptWindow.isDestroyed()) return;
+    promptWindow.webContents.send(
+      EVDEventEnum.FORCE_UPDATE_CHANGE,
+      forceUpdate
+    );
+  } catch (e) {}
 }
 
 function bindEvent(promptWindow: BrowserWindow, onError) {
@@ -1000,6 +1105,13 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
   });
 
   ipcMain.on(EVDEventEnum.SKIP, (_) => {
+    if (isForceUpdate) {
+      if (isUpdating && activeTracker?.state.stage === "install") {
+        return;
+      }
+      app.exit(0);
+      return;
+    }
     promptWindow.close();
   });
 
@@ -1008,9 +1120,13 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
     isUpdating = true;
 
     const tracker = new UpdateProgressTracker(promptWindow);
+    activeTracker = tracker;
 
     const handleUpdateFailed = (error: unknown) => {
       tracker.stop();
+      if (activeTracker === tracker) {
+        activeTracker = null;
+      }
       isUpdating = false;
       const evdError = toEVDError(error, tracker.getErrorContext());
       onError(evdError);
@@ -1084,7 +1200,12 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
       await installNewVersion(tracker, pkg);
 
       tracker.stop();
+      if (activeTracker === tracker) {
+        activeTracker = null;
+      }
       isUpdating = false;
+      //  必须在 promptWindow.close() 前置位，否则强制模式下 close 会先于 app.relaunch() 触发 app.exit(0)
+      isRelaunching = true;
 
       //  不知道什么情况会出现
       //  UnhandledRejection TypeError: Object has been destroyed
@@ -1094,6 +1215,10 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
     } catch (error) {
       handleUpdateFailed(error);
     }
+  });
+
+  ipcMain.handle(EVDEventEnum.GET_FORCE_UPDATE, () => {
+    return isForceUpdate;
   });
 
   ipcMain.handle(EVDEventEnum.GET_LOGO, () => {
@@ -1140,7 +1265,13 @@ function notifyUpdateError(
 
 function cleanup(promptWindow: BrowserWindow) {
   removeUpdateIpcListeners();
+  if (activeTracker) {
+    activeTracker.stop();
+    activeTracker = null;
+  }
   isUpdating = false;
+  isForceUpdate = false;
+  isRelaunching = false;
   if (activePromptWindow === promptWindow) {
     activePromptWindow = null;
   }

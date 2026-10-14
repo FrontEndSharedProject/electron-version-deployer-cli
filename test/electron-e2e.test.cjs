@@ -54,12 +54,13 @@ function createUpdateZip(zipFilePath, filesMap) {
 /**
  * 启动本地 HTTP 更新服务器
  */
-function startMockUpdateServer(zipPath, remotePkg) {
+function startMockUpdateServer(zipPath, remotePkg, options = {}) {
   return new Promise((resolveServer) => {
+    let currentRemotePkg = remotePkg;
     const server = http.createServer((req, res) => {
       const urlPath = (req.url || "").split("?")[0];
       if (urlPath === "/package.json") {
-        const body = JSON.stringify(remotePkg);
+        const body = JSON.stringify(currentRemotePkg);
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
@@ -70,7 +71,7 @@ function startMockUpdateServer(zipPath, remotePkg) {
       if (urlPath === "/changelog.json") {
         const body = JSON.stringify([
           {
-            version: remotePkg.version,
+            version: currentRemotePkg.version,
             date: "2026-10-14",
             body: "<ul><li>新增全流程更新进度与错误诊断提示</li></ul>",
           },
@@ -83,12 +84,19 @@ function startMockUpdateServer(zipPath, remotePkg) {
         return;
       }
       if (urlPath === "/logicCode.zip" || urlPath === "/fullCode.zip") {
-        const buf = readFileSync(zipPath);
-        res.writeHead(200, {
-          "Content-Type": "application/zip",
-          "Content-Length": buf.length,
-        });
-        res.end(buf);
+        const sendZip = () => {
+          const buf = readFileSync(zipPath);
+          res.writeHead(200, {
+            "Content-Type": "application/zip",
+            "Content-Length": buf.length,
+          });
+          res.end(buf);
+        };
+        if (options.downloadDelayMs > 0) {
+          setTimeout(sendZip, options.downloadDelayMs);
+        } else {
+          sendZip();
+        }
         return;
       }
       res.writeHead(404);
@@ -100,6 +108,9 @@ function startMockUpdateServer(zipPath, remotePkg) {
       resolveServer({
         server,
         url: `http://127.0.0.1:${addr.port}`,
+        setRemotePkg(nextPkg) {
+          currentRemotePkg = nextPkg;
+        },
       });
     });
   });
@@ -121,6 +132,7 @@ function runElectronScenario(scenarioName, setupOptions) {
       name: "mock-evd-app",
       version: "2.0.0",
       dependencies: { foo: "1.0.0" },
+      ...(setupOptions.remotePkgOverrides || {}),
     };
 
     await createUpdateZip(zipPath, {
@@ -132,7 +144,8 @@ function runElectronScenario(scenarioName, setupOptions) {
 
     const { server, url: remoteUrl } = await startMockUpdateServer(
       zipPath,
-      remotePkg
+      remotePkg,
+      { downloadDelayMs: setupOptions.downloadDelayMs || 0 }
     );
 
     writeFileSync(
@@ -140,7 +153,7 @@ function runElectronScenario(scenarioName, setupOptions) {
       JSON.stringify(
         {
           name: "mock-evd-app",
-          version: "1.0.0",
+          version: setupOptions.localVersion || "1.0.0",
           main: "main.cjs",
           dependencies: { foo: "1.0.0" },
         },
@@ -159,6 +172,22 @@ function runElectronScenario(scenarioName, setupOptions) {
       chmodSync(join(appDir, "locked-module.js"), 0o444);
     }
 
+    if (typeof setupOptions.nodeModulesTemplateHtml === "string") {
+      const nmTemplateDir = join(
+        appDir,
+        "node_modules",
+        "electron-version-deployer-cli",
+        "dist",
+        "templates"
+      );
+      mkdirSync(nmTemplateDir, { recursive: true });
+      writeFileSync(
+        join(nmTemplateDir, "newVersionDialog.html"),
+        setupOptions.nodeModulesTemplateHtml,
+        "utf-8"
+      );
+    }
+
     const resultJsonPath = join(tempBase, "result.json");
 
     // 构造 Electron 主进程入口脚本
@@ -172,28 +201,43 @@ const REMOTE_URL = ${JSON.stringify(remoteUrl)};
 const MAKE_APP_DIR_READONLY = ${JSON.stringify(
       !!setupOptions.makeAppDirReadonly
     )};
+const STUB_WIN_CLOSE = ${JSON.stringify(setupOptions.stubWinClose !== false)};
 const APP_DIR = ${JSON.stringify(appDir)};
 
 let capturedOnError = null;
 let relaunchCalled = false;
 let exitIntercepted = false;
+const exitCalls = [];
+const lifecycleOrder = [];
+let onBeforeInstallHook = null;
 
 const origExit = app.exit.bind(app);
 app.relaunch = () => {
   relaunchCalled = true;
+  lifecycleOrder.push("relaunch");
 };
-app.exit = () => {
+app.exit = (code) => {
   exitIntercepted = true;
+  exitCalls.push(code);
+  lifecycleOrder.push("exit:" + String(code));
 };
 // 静默窗口展示，避免自动化测试期间弹窗闪烁
 BrowserWindow.prototype.show = function () {};
 BrowserWindow.prototype.focus = function () {};
+app.on("window-all-closed", () => {});
 
 app.whenReady().then(async () => {
   try {
     EVDInit({
       remoteUrl: REMOTE_URL,
       detectAtStart: false,
+      onBeforeNewPkgInstall(next, version) {
+        if (typeof onBeforeInstallHook === "function") {
+          onBeforeInstallHook(next, version);
+        } else {
+          next();
+        }
+      },
       onError(err) {
         capturedOnError = {
           code: err.code,
@@ -223,9 +267,14 @@ app.whenReady().then(async () => {
           }
           const wins = BrowserWindow.getAllWindows();
           if (wins.length > 0) {
-            const win = wins[0];
-            // 阻止成功更新后 1ms 自动关闭销毁窗口，以便读取最终 DOM 状态
-            win.close = () => {};
+            const win = wins[wins.length - 1];
+            if (!win.__origClose) {
+              win.__origClose = win.close.bind(win);
+            }
+            if (STUB_WIN_CLOSE) {
+              // 阻止成功更新后 1ms 自动关闭销毁窗口，以便读取最终 DOM 状态
+              win.close = () => {};
+            }
             try {
               const ready = await win.webContents.executeJavaScript(
                 "Boolean(document.querySelector('#updateBtn') && document.querySelector('#stagePercent'))"
@@ -242,6 +291,43 @@ app.whenReady().then(async () => {
       });
 
     const dialogWin = await waitForDialogReady();
+    await new Promise((r) => setTimeout(r, 80));
+
+    ${setupOptions.customActionScript || ""}
+
+    if (${JSON.stringify(!!setupOptions.inspectInitialOnly)}) {
+      const initialSnapshot = await dialogWin.webContents.executeJavaScript(\`({
+        documentTitle: document.title,
+        headerText: document.querySelector(".title-bar span")?.textContent || "",
+        skipBtnText: document.querySelector("#skipBtn")?.textContent || "",
+        closeBtnText: document.querySelector("#closeBtn")?.textContent || "",
+        retryBtnText: document.querySelector("#retryBtn")?.textContent || "",
+        copyErrorBtnText: document.querySelector("#copyErrorBtn")?.textContent || "",
+        templateVersionMeta: document.querySelector('meta[name="evd-template-version"]')?.getAttribute("content") || null,
+        bodyLocalMarker: document.body.getAttribute("data-local-template") || null,
+      })\`);
+      initialSnapshot.windowTitle = dialogWin.getTitle();
+      initialSnapshot.loadedUrl = dialogWin.webContents.getURL();
+      writeFileSync(
+        RESULT_PATH,
+        JSON.stringify(
+          {
+            hasUpdate,
+            relaunchCalled,
+            exitIntercepted,
+            exitCalls,
+            lifecycleOrder,
+            capturedOnError,
+            domSnapshot: initialSnapshot,
+          },
+          null,
+          2
+        ),
+        "utf-8"
+      );
+      setTimeout(() => origExit(0), 50);
+      return;
+    }
 
     // 在渲染进程注入监听器收集所有 evd-update-progress 与 evd-update-error 事件，然后触发 #updateBtn 点击
     await dialogWin.webContents.executeJavaScript(\`
@@ -272,6 +358,12 @@ app.whenReady().then(async () => {
             const snapshot = await dialogWin.webContents.executeJavaScript(\`({
               progressEvents: window.__testProgressEvents,
               errorEvents: window.__testErrorEvents,
+              documentTitle: document.title,
+              headerText: document.querySelector(".title-bar span").textContent,
+              skipBtnText: document.querySelector("#skipBtn").textContent,
+              closeBtnText: document.querySelector("#closeBtn").textContent,
+              retryBtnText: document.querySelector("#retryBtn").textContent,
+              copyErrorBtnText: document.querySelector("#copyErrorBtn").textContent,
               loadingDisplay: document.querySelector(".loading-box").style.display,
               errorDisplay: document.querySelector(".error-box").style.display,
               stageTitle: document.querySelector("#stageTitle").textContent,
@@ -288,6 +380,7 @@ app.whenReady().then(async () => {
               errorCode: document.querySelector(".error-code").textContent,
               errorDetail: document.querySelector(".error-detail").textContent,
             })\`);
+            snapshot.windowTitle = dialogWin.getTitle();
 
             const reachedRelaunch = snapshot.progressEvents.some(
               (e) => e.stage === "relaunch"
@@ -317,6 +410,8 @@ app.whenReady().then(async () => {
           hasUpdate,
           relaunchCalled,
           exitIntercepted,
+          exitCalls,
+          lifecycleOrder,
           capturedOnError,
           domSnapshot,
         },
@@ -511,6 +606,416 @@ async function main() {
 
     console.log(
       `✅ PASS (${Date.now() - start}ms): E2E 场景 3 - 应用目录只读 (0o555) 时弹窗回退 temp 加载并在「环境与权限检查」阶段秒级拦截提示`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: forceRes } = await runElectronScenario("force-ui-copy", {
+      localVersion: "1.0.0",
+      remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+      lockTargetFile: true,
+    });
+    assertEqual(forceRes.domSnapshot.windowTitle, "版本过低，必须安装新版本");
+    assertEqual(forceRes.domSnapshot.documentTitle, "版本过低，必须安装新版本");
+    assertEqual(forceRes.domSnapshot.headerText, "版本过低，必须安装新版本");
+    assertEqual(forceRes.domSnapshot.skipBtnText, "退出软件");
+    assertEqual(forceRes.domSnapshot.closeBtnText, "退出软件");
+    assertEqual(forceRes.domSnapshot.retryBtnText, "重试");
+    assertEqual(forceRes.domSnapshot.copyErrorBtnText, "复制错误信息");
+
+    for (const optionalCase of [
+      { label: "missing", overrides: {} },
+      { label: "invalid-format", overrides: { minSupportedVersion: "v1.5.0" } },
+      { label: "equal-version", overrides: { minSupportedVersion: "1.0.0" } },
+    ]) {
+      const { result: optRes } = await runElectronScenario(
+        `optional-ui-${optionalCase.label}`,
+        {
+          localVersion: "1.0.0",
+          remotePkgOverrides: optionalCase.overrides,
+          inspectInitialOnly: true,
+        }
+      );
+      assertEqual(optRes.domSnapshot.windowTitle, "有可用的更新");
+      assertEqual(optRes.domSnapshot.documentTitle, "有可用的更新");
+      assertEqual(optRes.domSnapshot.headerText, "有可用的新版本：");
+      assertEqual(optRes.domSnapshot.skipBtnText, "稍后再提醒我");
+      assertEqual(optRes.domSnapshot.closeBtnText, "关闭");
+    }
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 4 - 强制更新与普通更新模式判定、窗口标题与按钮文案校验`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const distTemplateHtml = readFileSync(
+      join(REPO_ROOT, "dist", "templates", "newVersionDialog.html"),
+      "utf-8"
+    );
+
+    const legacyTemplateWithoutVersion = distTemplateHtml
+      .replace(/<meta[^>]*name=["']evd-template-version["'][^>]*>/i, "")
+      .replace("<body", '<body data-local-template="legacy-no-meta"');
+
+    const { result: missingMetaRes } = await runElectronScenario(
+      "template-missing-meta",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        nodeModulesTemplateHtml: legacyTemplateWithoutVersion,
+        inspectInitialOnly: true,
+      }
+    );
+    assertOk(
+      missingMetaRes.domSnapshot.loadedUrl.includes("_evdDialogTemplate.html"),
+      `缺失版本标记时应回退内嵌模板，实际 URL: ${missingMetaRes.domSnapshot.loadedUrl}`
+    );
+    assertEqual(missingMetaRes.domSnapshot.bodyLocalMarker, null);
+    assertOk(Boolean(missingMetaRes.domSnapshot.templateVersionMeta));
+    assertEqual(missingMetaRes.domSnapshot.skipBtnText, "退出软件");
+
+    const mismatchedTemplate =
+      legacyTemplateWithoutVersion.replace(
+        "<head>",
+        '<head><meta name="evd-template-version" content="999" />'
+      );
+    const { result: mismatchMetaRes } = await runElectronScenario(
+      "template-mismatch-meta",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        nodeModulesTemplateHtml: mismatchedTemplate,
+        inspectInitialOnly: true,
+      }
+    );
+    assertOk(
+      mismatchMetaRes.domSnapshot.loadedUrl.includes("_evdDialogTemplate.html"),
+      `版本标记不匹配时应回退内嵌模板，实际 URL: ${mismatchMetaRes.domSnapshot.loadedUrl}`
+    );
+    assertEqual(mismatchMetaRes.domSnapshot.bodyLocalMarker, null);
+
+    const matchedTemplate = distTemplateHtml.replace(
+      "<body",
+      '<body data-local-template="matched-local"'
+    );
+    const { result: matchedMetaRes } = await runElectronScenario(
+      "template-matched-meta",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        nodeModulesTemplateHtml: matchedTemplate,
+        inspectInitialOnly: true,
+      }
+    );
+    assertOk(
+      matchedMetaRes.domSnapshot.loadedUrl.includes(
+        "node_modules/electron-version-deployer-cli/dist/templates/newVersionDialog.html"
+      ),
+      `版本标记匹配时应沿用本地模板，实际 URL: ${matchedMetaRes.domSnapshot.loadedUrl}`
+    );
+    assertEqual(
+      matchedMetaRes.domSnapshot.bodyLocalMarker,
+      "matched-local"
+    );
+    assertEqual(matchedMetaRes.domSnapshot.skipBtnText, "退出软件");
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 5 - 模板协议版本校验：缺失或不匹配回退内嵌模板，匹配沿用本地模板`
+    );
+  }
+
+  {
+    const start = Date.now();
+
+    const { result: optSkipRes } = await runElectronScenario(
+      "optional-skip-no-exit",
+      {
+        localVersion: "1.0.0",
+        stubWinClose: false,
+        customActionScript: `
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#skipBtn').click()");
+          await new Promise((r) => setTimeout(r, 80));
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              exitCalls,
+              dialogDestroyed: dialogWin.isDestroyed(),
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+    assertEqual(optSkipRes.exitCalls.length, 0, "普通更新点击跳过不应调用 app.exit");
+    assertEqual(optSkipRes.dialogDestroyed, true, "普通更新点击跳过应销毁弹窗");
+
+    const { result: forceExitStagesRes } = await runElectronScenario(
+      "force-exit-stages",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        lockTargetFile: true,
+        downloadDelayMs: 250,
+        stubWinClose: false,
+        customActionScript: `
+          const stageExitRecords = {};
+
+          const beforeInitialSkip = exitCalls.length;
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#skipBtn').click()");
+          await new Promise((r) => setTimeout(r, 60));
+          stageExitRecords.initialSkipBtn = exitCalls.slice(beforeInitialSkip);
+
+          const beforeInitialClose = exitCalls.length;
+          dialogWin.close();
+          stageExitRecords.initialWinClose = exitCalls.slice(beforeInitialClose);
+
+          onBeforeInstallHook = (next) => {
+            const beforePrecheckClose = exitCalls.length;
+            dialogWin.close();
+            stageExitRecords.precheckClose = exitCalls.slice(beforePrecheckClose);
+            next();
+          };
+
+          let downloadClosed = false;
+          let unzipClosed = false;
+          const pollStages = setInterval(async () => {
+            if (dialogWin.isDestroyed()) return;
+            try {
+              const lastStage = await dialogWin.webContents.executeJavaScript(
+                "window.__testProgressEvents?.length ? window.__testProgressEvents[window.__testProgressEvents.length - 1].stage : null"
+              );
+              if (lastStage === "download" && !downloadClosed) {
+                downloadClosed = true;
+                const beforeDownloadClose = exitCalls.length;
+                dialogWin.close();
+                stageExitRecords.downloadClose = exitCalls.slice(beforeDownloadClose);
+              }
+              if (lastStage === "unzip" && !unzipClosed) {
+                unzipClosed = true;
+                const beforeUnzipClose = exitCalls.length;
+                dialogWin.close();
+                stageExitRecords.unzipClose = exitCalls.slice(beforeUnzipClose);
+              }
+            } catch (_) {}
+          }, 25);
+
+          await dialogWin.webContents.executeJavaScript(\`
+            (() => {
+              window.__testProgressEvents = [];
+              window.__testErrorEvents = [];
+              const ipc = require("electron").ipcRenderer;
+              ipc.on("evd-update-progress", (_, payload) => {
+                window.__testProgressEvents.push(payload);
+              });
+              ipc.on("evd-update-error", (_, payload) => {
+                window.__testErrorEvents.push(payload);
+              });
+              document.querySelector("#updateBtn").click();
+            })();
+          \`);
+
+          await new Promise((res, rej) => {
+            const deadline = Date.now() + 15000;
+            const checkErr = async () => {
+              if (Date.now() > deadline) return rej(new Error("Timed out waiting for error panel"));
+              try {
+                const errVisible = await dialogWin.webContents.executeJavaScript(
+                  "document.querySelector('.error-box').style.display === 'flex'"
+                );
+                if (errVisible) return res();
+              } catch (_) {}
+              setTimeout(checkErr, 50);
+            };
+            checkErr();
+          });
+          clearInterval(pollStages);
+
+          const beforeErrorBtn = exitCalls.length;
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#closeBtn').click()");
+          await new Promise((r) => setTimeout(r, 60));
+          stageExitRecords.errorCloseBtn = exitCalls.slice(beforeErrorBtn);
+
+          const beforeErrorWinClose = exitCalls.length;
+          dialogWin.close();
+          stageExitRecords.errorWinClose = exitCalls.slice(beforeErrorWinClose);
+
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              exitCalls,
+              stageExitRecords,
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    for (const [key, calls] of Object.entries(
+      forceExitStagesRes.stageExitRecords
+    )) {
+      assertOk(
+        Array.isArray(calls) && calls.length >= 1 && calls[0] === 0,
+        `强制模式阶段 ${key} 应调用 app.exit(0)，实际为: ${JSON.stringify(calls)}`
+      );
+    }
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 6 - 强制更新初始界面、precheck、下载、解压与错误面板关闭均触发 app.exit(0)，普通更新关闭不退出`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: installAndRelaunchRes, updatedPkgAfter } =
+      await runElectronScenario("force-install-block-and-relaunch", {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        stubWinClose: false,
+        customActionScript: `
+          const origSend = dialogWin.webContents.send.bind(dialogWin.webContents);
+          let installStageCloseTested = false;
+          let installCloseExitCalls = null;
+          let installCloseDestroyed = null;
+
+          dialogWin.webContents.send = function (channel, payload, ...rest) {
+            if (
+              channel === "evd-update-progress" &&
+              payload &&
+              payload.stage === "install" &&
+              !installStageCloseTested
+            ) {
+              installStageCloseTested = true;
+              const before = exitCalls.length;
+              dialogWin.close();
+              installCloseExitCalls = exitCalls.slice(before);
+              installCloseDestroyed = dialogWin.isDestroyed();
+            }
+            return origSend(channel, payload, ...rest);
+          };
+
+          await dialogWin.webContents.executeJavaScript(
+            "document.querySelector('#updateBtn').click()"
+          );
+
+          await new Promise((res, rej) => {
+            const deadline = Date.now() + 15000;
+            const waitRelaunch = () => {
+              if (Date.now() > deadline) {
+                return rej(new Error("Timed out waiting for relaunch in force mode"));
+              }
+              if (relaunchCalled && exitCalls.length > 0) {
+                return res();
+              }
+              setTimeout(waitRelaunch, 40);
+            };
+            waitRelaunch();
+          });
+
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              installStageCloseTested,
+              installCloseExitCalls,
+              installCloseDestroyed,
+              relaunchCalled,
+              lifecycleOrder,
+              dialogDestroyedAfterRelaunch: dialogWin.isDestroyed(),
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      });
+
+    assertEqual(
+      installAndRelaunchRes.installStageCloseTested,
+      true,
+      "应在 install 阶段触发关闭测试"
+    );
+    assertEqual(
+      installAndRelaunchRes.installCloseExitCalls.length,
+      0,
+      "install 阶段关闭弹窗应被拦截，不得调用 app.exit"
+    );
+    assertEqual(
+      installAndRelaunchRes.installCloseDestroyed,
+      false,
+      "install 阶段关闭弹窗应被拦截，窗口不得被销毁"
+    );
+    assertEqual(installAndRelaunchRes.relaunchCalled, true);
+    assertEqual(
+      installAndRelaunchRes.dialogDestroyedAfterRelaunch,
+      true,
+      "更新成功后进入重启流程应放行关闭弹窗"
+    );
+    assertEqual(
+      installAndRelaunchRes.lifecycleOrder[0],
+      "relaunch",
+      `更新成功后应先调用 app.relaunch() 再调用 app.exit()，实际顺序: ${JSON.stringify(
+        installAndRelaunchRes.lifecycleOrder
+      )}`
+    );
+    assertEqual(updatedPkgAfter.version, "2.0.0");
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 7 - 强制更新 install 阶段拦截关闭，更新完成后放行关闭并正常执行 app.relaunch()`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: hostClosedRes } = await runElectronScenario(
+      "force-host-windows-closed",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        stubWinClose: false,
+        customActionScript: `
+          const hostWin = new BrowserWindow({ show: false });
+          await new Promise((r) => setTimeout(r, 1150));
+          const beforeCloseExitCount = exitCalls.length;
+          hostWin.close();
+          await new Promise((r) => setTimeout(r, 60));
+
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              exitCallsAfterHostClosed: exitCalls.slice(beforeCloseExitCount),
+              dialogDestroyed: dialogWin.isDestroyed(),
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertOk(
+      Array.isArray(hostClosedRes.exitCallsAfterHostClosed) &&
+        hostClosedRes.exitCallsAfterHostClosed.length >= 1 &&
+        hostClosedRes.exitCallsAfterHostClosed[0] === 0,
+      `宿主其它窗口全部关闭只剩弹窗时应调用 app.exit(0)，实际为: ${JSON.stringify(
+        hostClosedRes.exitCallsAfterHostClosed
+      )}`
+    );
+    assertEqual(
+      hostClosedRes.dialogDestroyed,
+      false,
+      "强制模式下只剩弹窗时不应调用 cleanup 销毁弹窗"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 8 - 强制更新下宿主其它窗口全部关闭只剩弹窗时调用 app.exit(0) 且不销毁弹窗`
     );
   }
 }

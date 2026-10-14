@@ -225,6 +225,16 @@ EVDCheckUpdate()
 
 `onAutoCheckError` 优先级高于 `silentAutoCheck`：只要提供了它，自动检查的错误就只走它，不再走 `onError`。两者都不提供时行为与旧版本一致。
 
+### 强制更新（Force Update）与客户端行为
+
+当远程版本元数据（远程 `package.json`）中的 `version` 高于本地版本，且声明了合法的最低支持版本 `minSupportedVersion`（严格匹配 `x.y.z`），同时本地版本低于 `minSupportedVersion` 时，客户端自动进入**强制更新（Force Update）**模式；若未声明、格式非法或本地版本不低于 `minSupportedVersion`，则保持**普通更新（Optional Update）**行为。
+
+- **弹窗文案与按钮**：强制更新模式下，更新弹窗的窗口标题与顶部提示变为「版本过低，必须安装新版本」，初始界面与错误面板的关闭类按钮变为「退出软件」（错误面板的「重试」与「复制错误信息」按钮保持不变）。
+- **关闭即退出生命周期**：强制更新模式下，除 `install` 阶段（安装子进程正在覆盖本地文件）会拦截窗口关闭以防破坏安装目录、以及更新完成后的重启流程放行关闭并调用 `app.relaunch()` 外，其余任何阶段（初始界面、`precheck` 环境检查与等待 `onBeforeNewPkgInstall`、`download` 下载、`unzip` 解压、错误面板）点击「退出软件」、点击系统关闭按钮，或宿主其它窗口全部关闭只剩更新弹窗时，主进程均直接调用 `app.exit(0)` 退出应用。
+- **`app.exit(0)` 注意事项**：`app.exit(0)` 会直接终止进程，**跳过宿主应用的 `before-quit` / `will-quit` 收尾钩子**。需要在更新写入前释放的资源（如数据库连接、文件锁）请放在 `onBeforeNewPkgInstall` 中处理。
+- **模板协议版本回退**：弹窗模板带有 `<meta name="evd-template-version" content="1" />` 协议版本标记。当本地依赖目录 `node_modules/electron-version-deployer-cli/dist/templates/newVersionDialog.html` 缺失该标记或版本与主进程内置版本不匹配时，主进程自动回退到编译内嵌模板；版本一致时沿用本地模板。主进程作为强制模式的唯一权威，即便收到旧模板发出的 `evd-skip` 也会执行退出。
+- **旧客户端兼容性**：不支持 `minSupportedVersion` 的旧版客户端会忽略该字段并按普通更新处理，强制更新仅对已包含该特性的客户端版本生效。
+
 > 一下命令全部必须在项目根目录执行 （与 package.json 同级）
 
 ### 初始化配置

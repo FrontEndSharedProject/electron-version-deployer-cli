@@ -13,6 +13,7 @@
       href="https://chat.openai.com/favicon-32x32.png"
     />
     <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <meta name="evd-template-version" content="1" />
     <title>有可用的更新</title>
     <style>
       * {
@@ -386,9 +387,39 @@
         "#copyProgressDiagBtn"
       );
       const copyErrorBtnRef = document.querySelector("#copyErrorBtn");
+      const headerTitleSpanRef = document.querySelector(".title-bar span");
+      const skipBtnRef = document.querySelector("#skipBtn");
+      const closeBtnRef = document.querySelector("#closeBtn");
 
       let currentDiagnosticText = "";
       let errorDetailText = "";
+
+      function applyForceUpdateMode(force) {
+        const isForce =
+          typeof force === "object" && force !== null
+            ? Boolean(force.forceUpdate)
+            : Boolean(force);
+        document.title = isForce ? "版本过低，必须安装新版本" : "有可用的更新";
+        if (headerTitleSpanRef) {
+          headerTitleSpanRef.textContent = isForce
+            ? "版本过低，必须安装新版本"
+            : "有可用的新版本：";
+        }
+        if (skipBtnRef) {
+          skipBtnRef.textContent = isForce ? "退出软件" : "稍后再提醒我";
+        }
+        if (closeBtnRef) {
+          closeBtnRef.textContent = isForce ? "退出软件" : "关闭";
+        }
+      }
+
+      ipcRenderer.on("evd-force-update-change", (_, force) => {
+        applyForceUpdateMode(force);
+      });
+
+      ipcRenderer.invoke("evd-get-force-update").then((force) => {
+        applyForceUpdateMode(force);
+      });
 
       function formatDuration(sec) {
         const s = Math.max(0, Number(sec) || 0);
