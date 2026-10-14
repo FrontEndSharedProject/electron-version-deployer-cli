@@ -13,11 +13,13 @@ export function downloadFile(props: {
   url: string;
   destPath: string;
   stallTimeoutMs?: number;
+  onProgress?: (progress: { loadedBytes: number; totalBytes: number }) => void;
 }) {
   const {
     url,
     destPath,
     stallTimeoutMs = DEFAULT_DOWNLOAD_STALL_TIMEOUT_MS,
+    onProgress,
   } = props;
   const ctx = { phase: EVDErrorPhaseEnum.DOWNLOAD, url };
 
@@ -66,8 +68,28 @@ export function downloadFile(props: {
         return;
       }
 
-      //  交给 pipe 写入以保留背压，data 监听只用来判断是否停顿
-      response.on("data", resetStallTimer);
+      const rawContentLength = response.headers?.["content-length"];
+      const contentLengthStr = Array.isArray(rawContentLength)
+        ? rawContentLength[0]
+        : rawContentLength;
+      const totalBytes = Number(contentLengthStr) || 0;
+      let loadedBytes = 0;
+
+      if (onProgress) {
+        onProgress({ loadedBytes: 0, totalBytes });
+      }
+
+      //  交给 pipe 写入以保留背压，data 监听用来判断是否停顿并统计下载进度
+      response.on("data", (chunk: Buffer) => {
+        resetStallTimer();
+        loadedBytes += chunk?.length ?? 0;
+        if (onProgress) {
+          onProgress({ loadedBytes, totalBytes });
+        }
+      });
+      response.on("aborted", () =>
+        fail(new Error("ERR_CONNECTION_CLOSED: response aborted"))
+      );
       response.on("error", (error: unknown) => fail(error));
 
       //  @ts-ignore electron 的 IncomingMessage 是 node Readable

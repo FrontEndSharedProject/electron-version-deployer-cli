@@ -13,7 +13,10 @@
     "serve": "esno ./watch.ts",
     "build": "MODE=production esno ./watch.ts && tsc -p ./tsconfig.dist.json -emitDeclarationOnly && tsc-alias -p ./tsconfig.dist.json",
     "format": "npx prettier --write \"**/*.{js,mjs,cjs,ts,tsx,jsx,json,html}\"",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test:unit": "esno ./test/unit-and-installer.test.ts",
+    "test:e2e": "node ./test/electron-e2e.test.cjs",
+    "test": "pnpm run test:unit && pnpm run test:e2e"
   },
   "bin": {
     "evd": "./dist/cli.cjs"

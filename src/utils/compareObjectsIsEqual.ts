@@ -3,16 +3,18 @@
  * @param obj1
  * @param obj2
  */
-export function compareObjectsIsEqual(obj1, obj2) {
-  const keys1 = Object.keys(obj1);
-  const keys2 = Object.keys(obj2);
+export function compareObjectsIsEqual(obj1: any = {}, obj2: any = {}) {
+  const safeObj1 = obj1 && typeof obj1 === "object" ? obj1 : {};
+  const safeObj2 = obj2 && typeof obj2 === "object" ? obj2 : {};
+  const keys1 = Object.keys(safeObj1);
+  const keys2 = Object.keys(safeObj2);
 
   if (keys1.length !== keys2.length) {
     return false;
   }
 
   for (let key of keys1) {
-    if (obj1[key] !== obj2[key]) {
+    if (safeObj1[key] !== safeObj2[key]) {
       return false;
     }
   }

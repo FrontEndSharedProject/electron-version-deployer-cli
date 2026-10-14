@@ -10,68 +10,144 @@ const {
   writeFileSync,
   readFileSync,
 } = require("fs");
-const { join, resolve, basename, sep, dirname, isAbsolute } = require("path");
+const { join, resolve, basename, relative } = require("path");
+
+const SOURCE_ROOT = "__unzipPath__";
+const TARGET_ROOT = "__appPath__";
+const PROGRESS_THROTTLE_MS = 60;
+
+let totalFiles = 0;
+let completedFiles = 0;
+let currentFilePath = "";
+let lastProgressSentAt = 0;
 
 try {
-  copyFolderRecursiveSync("__unzipPath__", "__appPath__");
+  const operations = collectCopyOperations(SOURCE_ROOT, TARGET_ROOT);
+  totalFiles = operations.filter((op) => op.type === "file").length;
+  postProgress(true);
+
+  executeCopyOperations(operations);
+
+  postProgress(true);
+  process.parentPort.postMessage({
+    type: "done",
+    completed: completedFiles,
+    total: totalFiles,
+  });
   process.parentPort.postMessage("exitManually");
-  process.exit(0);
+  setTimeout(() => process.exit(0), 50);
 } catch (error) {
-  appendFileSync(
-    resolve(__dirname, "evdInstallerErrors.txt"),
-    `
-        ${new Date().toString()}\n
-        ${error.toString()}\n
-        -- stack\n
-        ${error.stack}\n
-        ----------------------------------------------------------------\n
-      `
-  );
-  //  前缀与 src/main.ts 的 INSTALLER_FAILED_PREFIX 保持一致
-  process.parentPort.postMessage("installFailed:" + error.message);
-  process.exit(0);
+  logErrorToFile(error);
+  const codePrefix = error && error.code ? error.code + ": " : "";
+  const errMsg =
+    codePrefix + (error && error.message ? error.message : String(error));
+  process.parentPort.postMessage({
+    type: "error",
+    code: error && error.code,
+    filePath: (error && (error.filePath || error.path)) || currentFilePath,
+    completed: completedFiles,
+    total: totalFiles,
+    message: errMsg,
+    stack: error && error.stack,
+  });
+  //  保留旧字符串格式兼容，等待 IPC 消息刷出后再以非 0 退出码退出
+  process.parentPort.postMessage("installFailed:" + errMsg);
+  setTimeout(() => process.exit(1), 50);
 }
 
-// 复制文件夹及其内容的函数
-function copyFolderRecursiveSync(source, target) {
-  // 如果目标目录不存在，则创建目标目录
-  if (!existsSync(target)) {
-    mkdirRecursiveSync(target);
-  }
-
-  // 获取源目录的文件列表
-  const files = readdirSync(source);
-
-  // 遍历文件列表，处理每个文件或子目录
-  files.forEach((folderOrFile) => {
-    const sourcePath = join(source, folderOrFile);
-    const targetPath = join(target, folderOrFile);
-
-    // 如果当前文件是文件夹，则递归复制文件夹
-    if (statSync(sourcePath).isDirectory()) {
-      if (folderOrFile === "node_modules") {
-        replaceChangedModuleSync(sourcePath, targetPath);
-      } else {
-        copyFolderRecursiveSync(sourcePath, targetPath);
-      }
-    } else {
-      // 否则，复制文件
-      try {
-        copyFileSync(sourcePath, targetPath);
-      } catch (error) {
-        appendFileSync(
-          resolve(__dirname, "evdInstallerErrors.txt"),
-          `
+function logErrorToFile(error) {
+  try {
+    appendFileSync(
+      resolve(__dirname, "evdInstallerErrors.txt"),
+      `
         ${new Date().toString()}\n
+        file: ${(error && (error.filePath || error.path)) || currentFilePath}\n
         ${error.toString()}\n
         -- stack\n
         ${error.stack}\n
         ----------------------------------------------------------------\n
       `
-        );
+    );
+  } catch (_) {}
+}
+
+function postProgress(force) {
+  const now = Date.now();
+  if (!force && now - lastProgressSentAt < PROGRESS_THROTTLE_MS) return;
+  lastProgressSentAt = now;
+  try {
+    process.parentPort.postMessage({
+      type: "progress",
+      completed: completedFiles,
+      total: totalFiles,
+      currentFile: currentFilePath,
+    });
+  } catch (_) {}
+}
+
+// 单次遍历收集需要创建的目录与需要复制的文件，避免重复遍历与重复读取 package.json
+function collectCopyOperations(
+  source,
+  target,
+  isNodeModules = false,
+  operations = []
+) {
+  if (!existsSync(source)) return operations;
+  operations.push({ type: "dir", targetPath: target });
+
+  const entries = readdirSync(source);
+  entries.forEach((entryName) => {
+    const sourcePath = join(source, entryName);
+    const targetPath = join(target, entryName);
+
+    if (statSync(sourcePath).isDirectory()) {
+      if (isNodeModules) {
+        if (entryName.startsWith("@")) {
+          collectCopyOperations(sourcePath, targetPath, true, operations);
+        } else if (shouldReplaceModule(sourcePath, targetPath)) {
+          collectCopyOperations(sourcePath, targetPath, false, operations);
+        }
+      } else if (entryName === "node_modules") {
+        collectCopyOperations(sourcePath, targetPath, true, operations);
+      } else {
+        collectCopyOperations(sourcePath, targetPath, false, operations);
       }
+    } else {
+      operations.push({ type: "file", sourcePath, targetPath });
     }
   });
+
+  return operations;
+}
+
+function executeCopyOperations(operations) {
+  operations.forEach((op) => {
+    if (op.type === "dir") {
+      if (!existsSync(op.targetPath)) {
+        try {
+          mkdirRecursiveSync(op.targetPath);
+        } catch (error) {
+          error.filePath = op.targetPath;
+          throw error;
+        }
+      }
+    } else {
+      copySingleFileWithProgress(op.sourcePath, op.targetPath);
+    }
+  });
+}
+
+function copySingleFileWithProgress(sourcePath, targetPath) {
+  currentFilePath = relative(SOURCE_ROOT, sourcePath) || basename(sourcePath);
+  postProgress(completedFiles === 0);
+  try {
+    copyFileSync(sourcePath, targetPath);
+    completedFiles += 1;
+    postProgress(completedFiles === totalFiles);
+  } catch (error) {
+    error.filePath = targetPath;
+    throw error;
+  }
 }
 
 function copyFileSync(source, target) {
@@ -84,35 +160,6 @@ function copyFileSync(source, target) {
   }
 
   writeFileSync(targetFile, readFileSync(source));
-}
-
-function replaceChangedModuleSync(
-  sourceNodeModulesFolder,
-  destNodeModulesFolder
-) {
-  //  读取 evdUnzip/node_modules 所有子文件
-  const fileOrFolder = readdirSync(sourceNodeModulesFolder);
-
-  // 遍历文件列表，处理每个文件或子目录
-  fileOrFolder.forEach((folderOrFileName) => {
-    const sourcePath = join(sourceNodeModulesFolder, folderOrFileName);
-    const targetPath = join(destNodeModulesFolder, folderOrFileName);
-
-    // 如果当前文件是文件夹，则判断是否要更新
-    if (statSync(sourcePath).isDirectory()) {
-      //  如果是组织文件夹比如
-      if (folderOrFileName.startsWith("@")) {
-        replaceChangedModuleSync(sourcePath, targetPath);
-      } else {
-        //  如果不存在，或者版本不一样则进行替换
-        if (shouldReplaceModule(sourcePath, targetPath)) {
-          copyFolderRecursiveSync(sourcePath, targetPath);
-        }
-      }
-    } else {
-      copyFileSync(sourcePath, targetPath);
-    }
-  });
 }
 
 function shouldReplaceModule(sourcePath, destPath) {

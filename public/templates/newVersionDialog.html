@@ -104,13 +104,130 @@
         top: 0;
         bottom: 0;
         right: 0;
-        background: rgba(255, 255, 255, 0.9);
-        font-size: 18px;
-        flex-direction: row;
-        align-items: center;
-        justify-content: center;
+        background: #f5f5f7;
+        flex-direction: column;
+        justify-content: space-between;
         display: none;
+        padding: 16px 18px;
+        box-sizing: border-box;
+        z-index: 10;
+      }
+
+      .stage-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .stage-title {
+        font-size: 15px;
         font-weight: bold;
+        color: #111;
+      }
+
+      .stage-percent {
+        font-size: 13px;
+        font-weight: bold;
+        color: #0066cc;
+      }
+
+      .progress-track {
+        width: 100%;
+        height: 7px;
+        background: #e0e0e6;
+        border-radius: 99px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
+
+      .progress-fill {
+        height: 100%;
+        width: 2%;
+        background: linear-gradient(90deg, #007bff, #00a2ff);
+        transition: width 0.2s ease, background 0.2s ease;
+      }
+
+      .progress-fill.stalled {
+        background: #f59e0b;
+      }
+
+      .step-list {
+        background: #fff;
+        border: 1px solid #e5e5ea;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        font-size: 12px;
+      }
+
+      .step-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 3px 0;
+        color: #666;
+      }
+
+      .step-row.done {
+        color: #10b981;
+      }
+
+      .step-row.current {
+        color: #0066cc;
+        font-weight: bold;
+      }
+
+      .current-file-box {
+        background: #eef4ff;
+        border: 1px solid #cfe0ff;
+        border-radius: 5px;
+        padding: 6px 8px;
+        font-family: Menlo, Consolas, monospace;
+        font-size: 11px;
+        color: #1e3a8a;
+        margin-bottom: 8px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .stall-alert {
+        display: none;
+        background: #fff8e6;
+        border: 1px solid #ffd591;
+        border-radius: 5px;
+        padding: 6px 8px;
+        font-size: 11px;
+        line-height: 1.45;
+        color: #b45309;
+        margin-bottom: 8px;
+      }
+
+      .progress-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: auto;
+      }
+
+      .elapsed-text {
+        font-size: 11px;
+        color: #888;
+      }
+
+      .diag-copy-btn {
+        padding: 5px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 4px;
+        border: 1px solid #d0d0d7;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+      }
+
+      .diag-copy-btn:hover {
+        background: #ececf0;
       }
 
       .error-box {
@@ -124,42 +241,43 @@
         align-items: center;
         justify-content: center;
         display: none;
-        padding: 20px;
+        padding: 16px 18px;
         text-align: center;
+        z-index: 20;
       }
 
       .error-box .error-title {
-        font-size: 18px;
+        font-size: 17px;
         font-weight: bold;
         color: #d93026;
-        margin-bottom: 12px;
-      }
-
-      .error-box .error-message {
-        font-size: 14px;
-        line-height: 1.6;
         margin-bottom: 8px;
       }
 
+      .error-box .error-message {
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 6px;
+      }
+
       .error-box .error-code {
-        font-size: 12px;
+        font-size: 11px;
         color: #999;
-        margin-bottom: 12px;
+        margin-bottom: 8px;
       }
 
       .error-box .error-detail {
         width: 100%;
-        max-height: 90px;
+        max-height: 96px;
         overflow: auto;
         box-sizing: border-box;
         padding: 8px;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
         border: 1px solid #e0e0e0;
         border-radius: 4px;
         background: #fafafa;
         font-family: Menlo, Consolas, monospace;
         font-size: 11px;
-        line-height: 1.5;
+        line-height: 1.45;
         color: #666;
         text-align: left;
         white-space: pre-wrap;
@@ -176,7 +294,49 @@
     </style>
   </head>
   <body>
-    <div class="loading-box">软件更新中……</div>
+    <div class="loading-box">
+      <div>
+        <div class="stage-header">
+          <span class="stage-title" id="stageTitle">正在准备更新...</span>
+          <span class="stage-percent" id="stagePercent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="step-list">
+          <div class="step-row current" id="row-precheck">
+            <span>1. 环境与写入权限检查</span>
+            <span id="val-precheck">检查中...</span>
+          </div>
+          <div class="step-row" id="row-download">
+            <span>2. 下载更新包</span>
+            <span id="val-download">等待中</span>
+          </div>
+          <div class="step-row" id="row-unzip">
+            <span>3. 解压更新包</span>
+            <span id="val-unzip">等待中</span>
+          </div>
+          <div class="step-row" id="row-install">
+            <span>4. 更新本地文件</span>
+            <span id="val-install">等待中</span>
+          </div>
+          <div class="step-row" id="row-relaunch">
+            <span>5. 重启应用</span>
+            <span id="val-relaunch">等待中</span>
+          </div>
+        </div>
+        <div class="current-file-box" id="currentFileBox">
+          当前处理: 正在初始化...
+        </div>
+        <div class="stall-alert" id="stallAlert"></div>
+      </div>
+      <div class="progress-footer">
+        <span class="elapsed-text" id="elapsedText">已用时: 00:00</span>
+        <button id="copyProgressDiagBtn" class="diag-copy-btn">
+          复制当前诊断信息
+        </button>
+      </div>
+    </div>
     <div class="error-box">
       <div class="error-title">更新失败</div>
       <div class="error-message"></div>
@@ -207,13 +367,41 @@
     <script>
       const { ipcRenderer, clipboard } = require("electron");
 
+      const STAGE_ORDER = [
+        "precheck",
+        "download",
+        "unzip",
+        "install",
+        "relaunch",
+      ];
       const loadingBoxRef = document.querySelector(".loading-box");
       const errorBoxRef = document.querySelector(".error-box");
+      const stageTitleRef = document.querySelector("#stageTitle");
+      const stagePercentRef = document.querySelector("#stagePercent");
+      const progressFillRef = document.querySelector("#progressFill");
+      const currentFileBoxRef = document.querySelector("#currentFileBox");
+      const stallAlertRef = document.querySelector("#stallAlert");
+      const elapsedTextRef = document.querySelector("#elapsedText");
+      const copyProgressDiagBtnRef = document.querySelector(
+        "#copyProgressDiagBtn"
+      );
+      const copyErrorBtnRef = document.querySelector("#copyErrorBtn");
+
+      let currentDiagnosticText = "";
+      let errorDetailText = "";
+
+      function formatDuration(sec) {
+        const s = Math.max(0, Number(sec) || 0);
+        const mm = String(Math.floor(s / 60)).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        return `${mm}:${ss}`;
+      }
 
       function startUpdate() {
-        ipcRenderer.send("evd-update-now");
         errorBoxRef.style.display = "none";
+        stallAlertRef.style.display = "none";
         loadingBoxRef.style.display = "flex";
+        ipcRenderer.send("evd-update-now");
       }
 
       document
@@ -231,8 +419,14 @@
         ipcRenderer.send("evd-skip");
       });
 
-      const copyErrorBtnRef = document.querySelector("#copyErrorBtn");
-      let errorDetailText = "";
+      copyProgressDiagBtnRef.addEventListener("click", () => {
+        clipboard.writeText(currentDiagnosticText || "正在采集诊断信息...");
+        copyProgressDiagBtnRef.textContent = "已复制诊断信息";
+        setTimeout(
+          () => (copyProgressDiagBtnRef.textContent = "复制当前诊断信息"),
+          2000
+        );
+      });
 
       copyErrorBtnRef.addEventListener("click", () => {
         clipboard.writeText(errorDetailText);
@@ -240,11 +434,57 @@
         setTimeout(() => (copyErrorBtnRef.textContent = "复制错误信息"), 2000);
       });
 
+      ipcRenderer.on("evd-update-progress", (_, state) => {
+        if (!state) return;
+        currentDiagnosticText = state.diagnosticText || "";
+        stageTitleRef.textContent = state.stageTitle || "正在更新...";
+        const pct = Math.max(0, Math.min(100, Number(state.percent) || 0));
+        stagePercentRef.textContent = `${pct}%`;
+        progressFillRef.style.width = `${pct}%`;
+
+        if (state.stalled) {
+          progressFillRef.classList.add("stalled");
+          stallAlertRef.textContent = `⚠️ 耗时较长提示：${
+            state.stalledReason || "当前步骤响应较慢"
+          }`;
+          stallAlertRef.style.display = "block";
+        } else {
+          progressFillRef.classList.remove("stalled");
+          stallAlertRef.style.display = "none";
+        }
+
+        const currentIdx = STAGE_ORDER.indexOf(state.stage);
+        STAGE_ORDER.forEach((stageKey, idx) => {
+          const rowEl = document.querySelector(`#row-${stageKey}`);
+          const valEl = document.querySelector(`#val-${stageKey}`);
+          if (rowEl) {
+            rowEl.className =
+              idx < currentIdx
+                ? "step-row done"
+                : idx === currentIdx
+                ? "step-row current"
+                : "step-row";
+          }
+          if (valEl && state.stepValues && state.stepValues[stageKey]) {
+            valEl.textContent = state.stepValues[stageKey];
+          }
+        });
+
+        currentFileBoxRef.textContent = `当前处理: ${state.currentItem || "-"}`;
+        elapsedTextRef.textContent = `已用时: ${formatDuration(
+          state.elapsedSeconds
+        )}`;
+      });
+
       ipcRenderer.on("evd-update-error", (_, error) => {
         errorDetailText = error.detail || error.message;
         loadingBoxRef.style.display = "none";
         errorBoxRef.querySelector(".error-message").textContent = error.message;
-        errorBoxRef.querySelector(".error-code").textContent = error.code;
+        const codeParts = [error.code, error.stage, error.progress].filter(
+          Boolean
+        );
+        errorBoxRef.querySelector(".error-code").textContent =
+          codeParts.join(" · ");
         errorBoxRef.querySelector(".error-detail").textContent =
           errorDetailText;
         errorBoxRef.style.display = "flex";
