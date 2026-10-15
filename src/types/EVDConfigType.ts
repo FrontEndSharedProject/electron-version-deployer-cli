@@ -57,7 +57,7 @@ export type EVDConfigType = {
     //  更新包最终可访问的地址，如 https://cdn.mycorp.com/app
     url: string;
   };
-  //  更新压缩包（fullCode.zip / logicCode.zip）拆分设置
+  //  全量更新包与增量更新包的分片更新包设置
   zipSplit?: {
     //  是否拆分，默认按 provider 推断：cloudflare 为 true，netlify / selfHosted 为 false
     enabled?: boolean;

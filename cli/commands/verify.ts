@@ -7,12 +7,7 @@ import { getWhichProvider } from "../helpers/getWhichProvider";
 import { EVD_FOLDER } from "../helpers/deployChecks";
 import { fetchRemoteJSON, probeRemoteFile } from "../helpers/remoteProbe";
 import { joinRemoteUrl } from "@/utils/joinRemoteUrl";
-import {
-  SPLIT_FOLDER_NAME,
-  FULL_CODE_ZIP_NAME,
-  LOGIC_SPLIT_FOLDER_NAME,
-  LOGIC_CODE_ZIP_NAME,
-} from "../helpers/zipSplit";
+import { SPLIT_TARGETS } from "../helpers/zipSplit";
 
 type CheckResult = {
   label: string;
@@ -150,25 +145,15 @@ export async function runChecks(
 
   results.push(await checkFile(url, "changelogs.html", requestOptions));
 
-  const localLogicSplitIndex = r(
-    `${EVD_FOLDER}/${LOGIC_SPLIT_FOLDER_NAME}/index.json`
-  );
-  if (existsSync(localLogicSplitIndex)) {
-    results.push(
-      ...(await checkSplitZips(url, LOGIC_SPLIT_FOLDER_NAME, requestOptions))
-    );
-  } else {
-    results.push(await checkFile(url, LOGIC_CODE_ZIP_NAME, requestOptions));
-  }
-
-  //  拆分包与整包只会存在一种
-  const localSplitIndex = r(`${EVD_FOLDER}/${SPLIT_FOLDER_NAME}/index.json`);
-  if (existsSync(localSplitIndex)) {
-    results.push(
-      ...(await checkSplitZips(url, SPLIT_FOLDER_NAME, requestOptions))
-    );
-  } else {
-    results.push(await checkFile(url, FULL_CODE_ZIP_NAME, requestOptions));
+  for (const { zipName, splitFolderName } of SPLIT_TARGETS) {
+    const localSplitIndex = r(`${EVD_FOLDER}/${splitFolderName}/index.json`);
+    if (existsSync(localSplitIndex)) {
+      results.push(
+        ...(await checkSplitZips(url, splitFolderName, requestOptions))
+      );
+    } else {
+      results.push(await checkFile(url, zipName, requestOptions));
+    }
   }
 
   return results;

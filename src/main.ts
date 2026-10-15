@@ -715,14 +715,11 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
     });
   }
 
-  //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的问题
-  //  原因是 cloudflare 只支持最大 25m 的文件上传
-  //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
   const splitFolder =
     zipFile === "fullCode.zip"
       ? "fullCodeZipSplitZips"
       : "logicCodeZipSplitZips";
-  let splitIndexFile: false | string[] = false;
+  let splitIndexList: false | string[] = false;
   tracker.update({
     stage: "download",
     stageTitle: "正在检查远程分片配置...",
@@ -734,7 +731,7 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
     },
   });
   try {
-    splitIndexFile = await netRequest({
+    splitIndexList = await netRequest({
       url: joinRemoteUrl(
         remoteUrl,
         `${splitFolder}/index.json?hash=${Math.random()}`
@@ -745,15 +742,14 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
     });
   } catch (e) {}
 
-  //  如果满足远程分割的条件
-  if (Array.isArray(splitIndexFile) && splitIndexFile.length > 0) {
-    const totalChunks = splitIndexFile.length;
-    const tmpFilePaths = splitIndexFile.map((fileName) =>
+  if (Array.isArray(splitIndexList) && splitIndexList.length > 0) {
+    const totalChunks = splitIndexList.length;
+    const tmpFilePaths = splitIndexList.map((fileName) =>
       join(appPath, fileName)
     );
 
     try {
-      for (const [index, fileName] of splitIndexFile.entries()) {
+      for (const [index, fileName] of splitIndexList.entries()) {
         const chunkNum = index + 1;
         tracker.update({
           stage: "download",
