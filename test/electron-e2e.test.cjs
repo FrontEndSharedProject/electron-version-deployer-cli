@@ -9,7 +9,7 @@ const {
   writeFileSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
-const { join, resolve } = require("node:path");
+const { dirname, join, resolve } = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const archiver = require("archiver");
@@ -154,6 +154,7 @@ function runElectronScenario(scenarioName, setupOptions) {
       "src/featureA.js": "module.exports = 'featureA v2.0.0';\n",
       "src/featureB.js": "module.exports = 'featureB v2.0.0';\n",
       "locked-module.js": "module.exports = 'updated locked module v2.0.0';\n",
+      ...(setupOptions.extraZipEntries || {}),
     });
 
     const { server, url: remoteUrl } = await startMockUpdateServer(
@@ -184,6 +185,16 @@ function runElectronScenario(scenarioName, setupOptions) {
       "module.exports = 'old v1.0.0';\n",
       "utf-8"
     );
+
+    if (setupOptions.initialAppFiles) {
+      for (const [relPath, content] of Object.entries(
+        setupOptions.initialAppFiles
+      )) {
+        const fullPath = join(appDir, relPath);
+        mkdirSync(dirname(fullPath), { recursive: true });
+        writeFileSync(fullPath, content, "utf-8");
+      }
+    }
 
     if (setupOptions.lockTargetFile) {
       chmodSync(join(appDir, "locked-module.js"), 0o444);
@@ -550,7 +561,22 @@ app.whenReady().then(async () => {
         const featureAAfter = existsSync(join(appDir, "src/featureA.js"))
           ? readFileSync(join(appDir, "src/featureA.js"), "utf-8")
           : null;
-        resolveScenario({ result, updatedPkgAfter, featureAAfter, appDir });
+        const appFilesAfter = {};
+        if (Array.isArray(setupOptions.readAppFiles)) {
+          for (const relPath of setupOptions.readAppFiles) {
+            const fullPath = join(appDir, relPath);
+            appFilesAfter[relPath] = existsSync(fullPath)
+              ? readFileSync(fullPath, "utf-8")
+              : null;
+          }
+        }
+        resolveScenario({
+          result,
+          updatedPkgAfter,
+          featureAAfter,
+          appFilesAfter,
+          appDir,
+        });
       } catch (err) {
         rejectScenario(err);
       } finally {
@@ -1510,9 +1536,53 @@ async function main() {
       `✅ PASS (${Date.now() - start}ms): E2E 场景 11 - 普通更新弹窗原位升级为强制模式（含错误面板同步更新与窗口阻断）且远程改回普通更新时不回退`
     );
   }
+
+  {
+    const start = Date.now();
+    const { result, updatedPkgAfter, appFilesAfter } =
+      await runElectronScenario("extra-folders-hot-update", {
+        initialAppFiles: {
+          "resources/config.json": '{"theme":"light"}',
+          "resources/legacy.txt": "keep-legacy-file",
+        },
+        extraZipEntries: {
+          "resources/config.json": '{"theme":"dark"}',
+          "resources/nested/new-icon.svg": '<svg id="new"/>',
+        },
+        readAppFiles: [
+          "resources/config.json",
+          "resources/nested/new-icon.svg",
+          "resources/legacy.txt",
+        ],
+      });
+
+    assertEqual(result.hasUpdate, true);
+    assertEqual(result.capturedOnError, null);
+    assertEqual(updatedPkgAfter.version, "2.0.0");
+    assertEqual(
+      appFilesAfter["resources/config.json"],
+      '{"theme":"dark"}',
+      "extraFolders 原有同名文件应被覆盖更新"
+    );
+    assertEqual(
+      appFilesAfter["resources/nested/new-icon.svg"],
+      '<svg id="new"/>',
+      "extraFolders 新增嵌套子目录与文件应成功写入"
+    );
+    assertEqual(
+      appFilesAfter["resources/legacy.txt"],
+      "keep-legacy-file",
+      "extraFolders 本地原有的其它历史文件应保留不删"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 12 - extraFolders 客户端热更新落盘（同名文件覆盖、新增嵌套文件写入、历史文件保留）`
+    );
+  }
 }
 
 main().catch((err) => {
   console.error("❌ E2E 测试失败:", err);
   process.exit(1);
 });
+

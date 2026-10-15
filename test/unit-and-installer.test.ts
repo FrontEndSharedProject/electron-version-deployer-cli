@@ -382,12 +382,35 @@ async function main() {
           "module.exports = 'scoped-v1';"
         );
 
+        mkdirSync(join(sourceDir, "extra-assets", "nested"), {
+          recursive: true,
+        });
+        writeFileSync(
+          join(sourceDir, "extra-assets", "config.json"),
+          '{"v":2}'
+        );
+        writeFileSync(
+          join(sourceDir, "extra-assets", "nested", "added.txt"),
+          "new-extra-file"
+        );
+
         mkdirSync(join(targetDir, "node_modules", "unchanged-pkg"), {
           recursive: true,
         });
         mkdirSync(join(targetDir, "node_modules", "updated-pkg"), {
           recursive: true,
         });
+        mkdirSync(join(targetDir, "extra-assets"), {
+          recursive: true,
+        });
+        writeFileSync(
+          join(targetDir, "extra-assets", "config.json"),
+          '{"v":1}'
+        );
+        writeFileSync(
+          join(targetDir, "extra-assets", "legacy.txt"),
+          "keep-me"
+        );
         writeFileSync(
           join(targetDir, "package.json"),
           JSON.stringify({ version: "1.0.0" })
@@ -426,12 +449,12 @@ async function main() {
         );
         assert.equal(
           progressMsgs[0].total,
-          6,
-          "Pre-counted total files should be 6 (skipping unchanged-pkg)"
+          8,
+          "Pre-counted total files should be 8 (skipping unchanged-pkg, including extra-assets)"
         );
         assert.ok(doneMsg, "Should emit done message");
-        assert.equal(doneMsg.completed, 6);
-        assert.equal(doneMsg.total, 6);
+        assert.equal(doneMsg.completed, 8);
+        assert.equal(doneMsg.total, 8);
         assert.ok(
           res.messages.includes("exitManually"),
           "Should emit legacy exitManually message"
@@ -457,6 +480,21 @@ async function main() {
             "utf-8"
           ),
           "module.exports = 'scoped-v1';"
+        );
+        assert.equal(
+          readFileSync(join(targetDir, "extra-assets", "config.json"), "utf-8"),
+          '{"v":2}'
+        );
+        assert.equal(
+          readFileSync(
+            join(targetDir, "extra-assets", "nested", "added.txt"),
+            "utf-8"
+          ),
+          "new-extra-file"
+        );
+        assert.equal(
+          readFileSync(join(targetDir, "extra-assets", "legacy.txt"), "utf-8"),
+          "keep-me"
         );
       } finally {
         rmSync(workDir, { recursive: true, force: true });
@@ -1199,6 +1237,268 @@ async function main() {
       }
     }
   );
+
+  await runTest(
+    "prepare & extraFolders: 支持数组/同步函数/异步函数与相对/绝对路径、编译后解析、打入双 zip、清理残留裸目录、移除 deployChecks 裸复制及非法/冲突路径报错",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-extra-folders-"));
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({
+            name: "host-workspace",
+            version: "1.0.0",
+            scripts: {
+              build:
+                "node -e \"const fs=require('fs');fs.mkdirSync('compiled-extra',{recursive:true});fs.writeFileSync('compiled-extra/from-build.txt','built-ok');\"",
+            },
+          })
+        );
+        writeFileSync(
+          join(workDir, "CHANGELOG.md"),
+          "# Changelog\n\n## [2.0.0] - 2026-10-14\n\n- Support extraFolders hot update\n"
+        );
+        const evdFolder = join(workDir, "node_modules", ".evd");
+        mkdirSync(evdFolder, { recursive: true });
+
+        const appFolder = join(workDir, "compiled-app");
+        mkdirSync(join(appFolder, "node_modules", "dep-a"), {
+          recursive: true,
+        });
+        mkdirSync(join(appFolder, "dist"), { recursive: true });
+        writeFileSync(
+          join(appFolder, "node_modules", "dep-a", "index.js"),
+          "module.exports = 1;"
+        );
+        writeFileSync(join(appFolder, "dist", "main.js"), "console.log(1);");
+        writeFileSync(
+          join(appFolder, "package.json"),
+          JSON.stringify({ name: "my-electron-app", version: "2.0.0" })
+        );
+
+        const relExtraDir = join(workDir, "public", "static-assets");
+        mkdirSync(join(relExtraDir, "nested"), { recursive: true });
+        writeFileSync(join(relExtraDir, "logo.svg"), "<svg/>");
+        writeFileSync(join(relExtraDir, "nested", "data.json"), '{"ok":true}');
+
+        const absExtraDir = join(workDir, "external-resources", "themes");
+        mkdirSync(absExtraDir, { recursive: true });
+        writeFileSync(join(absExtraDir, "dark.css"), "body{color:#fff}");
+
+        const staleRawDir = join(evdFolder, "static-assets");
+        mkdirSync(staleRawDir, { recursive: true });
+        writeFileSync(join(staleRawDir, "stale.txt"), "stale");
+
+        process.chdir(workDir);
+
+        const baseConfigs = {
+          compileCommand: "build",
+          changelogsPath: "CHANGELOG.md",
+          sources: {
+            folder: appFolder,
+            nodeModules: "node_modules",
+            codes: "dist",
+            packageJSON: "package.json",
+          },
+          selfHosted: { url: "https://cdn.example.com/app" },
+          prebuiltConfig: {},
+        };
+
+        await copySourceAndZipFiles({
+          ...baseConfigs,
+          extraFolders: ["public/static-assets", absExtraDir],
+        });
+
+        assert.equal(
+          existsSync(staleRawDir),
+          false,
+          "Stale raw folder in node_modules/.evd/<basename> should be cleaned up"
+        );
+
+        const unzipFull1 = join(workDir, "unzip-full-1");
+        const unzipLogic1 = join(workDir, "unzip-logic-1");
+        await extract(join(evdFolder, "fullCode.zip"), { dir: unzipFull1 });
+        await extract(join(evdFolder, "logicCode.zip"), { dir: unzipLogic1 });
+
+        for (const unzipDir of [unzipFull1, unzipLogic1]) {
+          assert.equal(
+            readFileSync(
+              join(unzipDir, "static-assets", "logo.svg"),
+              "utf-8"
+            ),
+            "<svg/>"
+          );
+          assert.equal(
+            readFileSync(
+              join(unzipDir, "static-assets", "nested", "data.json"),
+              "utf-8"
+            ),
+            '{"ok":true}'
+          );
+          assert.equal(
+            readFileSync(join(unzipDir, "themes", "dark.css"), "utf-8"),
+            "body{color:#fff}"
+          );
+        }
+
+        await copySourceAndZipFiles({
+          ...baseConfigs,
+          extraFolders: () => ["public/static-assets"],
+        });
+        const unzipSyncFn = join(workDir, "unzip-sync-fn");
+        await extract(join(evdFolder, "logicCode.zip"), { dir: unzipSyncFn });
+        assert.equal(
+          readFileSync(join(unzipSyncFn, "static-assets", "logo.svg"), "utf-8"),
+          "<svg/>"
+        );
+        assert.equal(existsSync(join(unzipSyncFn, "themes")), false);
+
+        await copySourceAndZipFiles({
+          ...baseConfigs,
+          extraFolders: async () => [absExtraDir],
+        });
+        const unzipAsyncFn = join(workDir, "unzip-async-fn");
+        await extract(join(evdFolder, "logicCode.zip"), { dir: unzipAsyncFn });
+        assert.equal(
+          readFileSync(join(unzipAsyncFn, "themes", "dark.css"), "utf-8"),
+          "body{color:#fff}"
+        );
+
+        await copySourceAndZipFiles({
+          ...baseConfigs,
+          extraFolders: [],
+        });
+
+        writeFileSync(
+          join(workDir, "evd.config.js"),
+          `module.exports = {
+            compileCommand: "build",
+            changelogsPath: "CHANGELOG.md",
+            sources: {
+              folder: ${JSON.stringify(appFolder)},
+              nodeModules: "node_modules",
+              codes: "dist",
+              packageJSON: "package.json",
+            },
+            extraFolders: () => {
+              const fs = require("fs");
+              if (!fs.existsSync("compiled-extra/from-build.txt")) {
+                throw new Error("extraFolders called before compileCommand!");
+              }
+              return ["compiled-extra"];
+            },
+            selfHosted: { url: "https://cdn.example.com/app" },
+            prebuiltConfig: {},
+          };`
+        );
+
+        const prevExitCode = process.exitCode;
+        process.exitCode = 0;
+        await program.parseAsync(["node", "evd", "prepare"]);
+        assert.equal(process.exitCode, 0);
+
+        const unzipPrepare = join(workDir, "unzip-prepare");
+        await extract(join(evdFolder, "logicCode.zip"), { dir: unzipPrepare });
+        assert.equal(
+          readFileSync(
+            join(unzipPrepare, "compiled-extra", "from-build.txt"),
+            "utf-8"
+          ),
+          "built-ok"
+        );
+
+        const server = createServer((req, res) => {
+          if (req.url?.startsWith("/package.json")) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({ name: "my-electron-app", version: "1.9.0" })
+            );
+            return;
+          }
+          res.writeHead(404);
+          res.end();
+        });
+        await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+        const port = (server.address() as any).port;
+        try {
+          const checkConfigs = {
+            ...baseConfigs,
+            selfHosted: { url: `http://127.0.0.1:${port}` },
+            extraFolders: ["public/static-assets"],
+          };
+          await runDeployChecks(
+            checkConfigs,
+            getWhichProvider(checkConfigs),
+            createCheckPolicy({ interactive: false })
+          );
+          assert.equal(
+            existsSync(join(evdFolder, "static-assets")),
+            false,
+            "runDeployChecks should not copy raw extraFolders into .evd"
+          );
+        } finally {
+          server.close();
+        }
+
+        const fileNotDir = join(workDir, "single-file.txt");
+        writeFileSync(fileNotDir, "hello");
+        const dupDirA = join(workDir, "dup-a", "same-name");
+        const dupDirB = join(workDir, "dup-b", "same-name");
+        mkdirSync(dupDirA, { recursive: true });
+        mkdirSync(dupDirB, { recursive: true });
+        const collideCodes = join(workDir, "collide", "dist");
+        const collideNodeModules = join(workDir, "collide", "node_modules");
+        const collidePkgJson = join(workDir, "collide", "package.json");
+        mkdirSync(collideCodes, { recursive: true });
+        mkdirSync(collideNodeModules, { recursive: true });
+        mkdirSync(collidePkgJson, { recursive: true });
+
+        for (const invalidExtra of [
+          ["non-existent-folder"],
+          ["single-file.txt"],
+          [dupDirA, dupDirB],
+          [collideCodes],
+          [collideNodeModules],
+          [collidePkgJson],
+        ]) {
+          let caught: unknown = null;
+          try {
+            await copySourceAndZipFiles({
+              ...baseConfigs,
+              extraFolders: invalidExtra,
+            });
+          } catch (err) {
+            caught = err;
+          }
+          assert.ok(
+            caught instanceof Error,
+            `Expected error for extraFolders=${JSON.stringify(invalidExtra)}`
+          );
+        }
+
+        writeFileSync(
+          join(workDir, "evd.config.js"),
+          `module.exports = ${JSON.stringify({
+            ...baseConfigs,
+            extraFolders: ["non-existent-folder"],
+          })};`
+        );
+        process.exitCode = 0;
+        await program.parseAsync(["node", "evd", "prepare"]);
+        assert.equal(
+          process.exitCode,
+          1,
+          "evd prepare should set process.exitCode = 1 when extraFolders validation fails"
+        );
+        process.exitCode = prevExitCode;
+      } finally {
+        process.chdir(prevCwd);
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
 }
 
 main();
+

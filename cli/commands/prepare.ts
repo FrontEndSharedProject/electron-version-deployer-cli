@@ -9,10 +9,12 @@ import {
   readFileSync,
   writeFileSync,
   copyFileSync,
+  rmSync,
+  statSync,
 } from "node:fs";
 import { EVDConfigType } from "@/types/EVDConfigType";
 import parseChangelog from "changelog-parser";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { marked } from "marked";
 import { JSDOM } from "jsdom";
 import DOMPurify from "dompurify";
@@ -49,6 +51,54 @@ program
       "请执行 evd deploy 命令进行部署，或执行 evd preDeploy 后自行上传"
     );
   });
+
+export async function resolveExtraFolders(
+  configs: Pick<EVDConfigType, "extraFolders">,
+  reservedNames: string[]
+): Promise<string[]> {
+  if (!configs.extraFolders) return [];
+
+  const rawFolders =
+    typeof configs.extraFolders === "function"
+      ? await configs.extraFolders()
+      : configs.extraFolders;
+
+  if (!rawFolders || rawFolders.length === 0) return [];
+
+  const reservedSet = new Set(reservedNames);
+  const seenBasenames = new Set<string>();
+  const resolvedFolders: string[] = [];
+
+  for (const folder of rawFolders) {
+    const resolvedFolder = resolve(r(), folder);
+    if (!existsSync(resolvedFolder)) {
+      throw new Error(`未找到文件夹 ${folder}`);
+    }
+    const stat = statSync(resolvedFolder);
+    if (!stat.isDirectory()) {
+      throw new Error(`${folder} 不是一个文件夹`);
+    }
+
+    const folderName = basename(resolvedFolder);
+    if (reservedSet.has(folderName)) {
+      throw new Error(
+        `extraFolders 中的文件夹名称 "${folderName}" 与保留名称（${reservedNames.join(
+          "、"
+        )}）冲突！`
+      );
+    }
+    if (seenBasenames.has(folderName)) {
+      throw new Error(
+        `extraFolders 中存在同名文件夹 "${folderName}"，请避免目录名重复！`
+      );
+    }
+
+    seenBasenames.add(folderName);
+    resolvedFolders.push(resolvedFolder);
+  }
+
+  return resolvedFolders;
+}
 
 export async function copySourceAndZipFiles(configs: EVDConfigType) {
   const logicCodeZipPath = r("node_modules/.evd/logicCode.zip");
@@ -96,14 +146,31 @@ export async function copySourceAndZipFiles(configs: EVDConfigType) {
     configs,
     pkgContent.version
   );
+  const resolvedExtraFolders = await resolveExtraFolders(configs, [
+    basename(codesPath),
+    basename(nodeModulesPath),
+    "package.json",
+  ]);
+
+  for (const extraFolder of resolvedExtraFolders) {
+    const staleRawFolder = r(`${EVD_FOLDER}/${basename(extraFolder)}`);
+    if (existsSync(staleRawFolder)) {
+      rmSync(staleRawFolder, { recursive: true, force: true });
+    }
+  }
 
   //  生成压缩文件
   await archiveFiles(fullCodeZipPath, [
     nodeModulesPath,
     codesPath,
     packageJSONPath,
+    ...resolvedExtraFolders,
   ]);
-  await archiveFiles(logicCodeZipPath, [codesPath, packageJSONPath]);
+  await archiveFiles(logicCodeZipPath, [
+    codesPath,
+    packageJSONPath,
+    ...resolvedExtraFolders,
+  ]);
 
   //  将 package.json 放进去
   copyFileSync(packageJSONPath, r("node_modules/.evd/package.json"));
@@ -210,10 +277,15 @@ async function genChangelog(configs: EVDConfigType) {
   );
 
   //  写入 changelogs.html, 供用户查看
-  const changelogTemplate = readFileSync(
-    join(resolve(__dirname), "templates", "changelogs.html"),
-    "utf-8"
+  const distTemplatePath = join(
+    resolve(__dirname),
+    "templates",
+    "changelogs.html"
   );
+  const changelogTemplatePath = existsSync(distTemplatePath)
+    ? distTemplatePath
+    : resolve(__dirname, "../../public/templates/changelogs.html");
+  const changelogTemplate = readFileSync(changelogTemplatePath, "utf-8");
   writeFileSync(
     r("node_modules/.evd/changelogs.html"),
     changelogTemplate.replace("__INJECT__", JSON.stringify(allChanges)),

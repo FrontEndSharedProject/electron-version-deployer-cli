@@ -1,14 +1,7 @@
 import { EVDConfigType } from "@/types/EVDConfigType";
 import { confirm } from "@inquirer/prompts";
-import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  rmSync,
-  statSync,
-  cpSync,
-} from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import logSymbols from "log-symbols";
 import { r } from "../utils";
 import { STRICT_VERSION_RE, versionToNum } from "@/utils/versionToNum";
@@ -197,7 +190,6 @@ export async function runDeployChecks(
     if (!confirmed) throw new Error("部署已停止！");
   }
 
-  await deployExtraFolders(configs);
   applyMinSupportedVersion(r(EVD_FOLDER), resolvedMinVersion.minSupportedVersion);
 
   return resolvedMinVersion;
@@ -356,43 +348,3 @@ function checkEVDFolderExist() {
   }
 }
 
-export async function deployExtraFolders(configs: EVDConfigType) {
-  const extraFolders = configs.extraFolders;
-  if (!extraFolders) return;
-
-  let folders: string[] = [];
-  if (typeof extraFolders === "function") {
-    folders = await extraFolders();
-  } else {
-    folders = extraFolders;
-  }
-
-  for (const folder of folders) {
-    //  判断文件是否存在
-    if (!existsSync(r(folder))) {
-      throw new Error(`未找到文件夹 ${folder}`);
-    }
-
-    // 判断文件是否为文件夹
-    const stat = statSync(r(folder));
-    if (!stat.isDirectory()) {
-      throw new Error(`${folder} 不是一个文件夹`);
-    }
-
-    // 如果 folder 存在先删除
-    const destFolder = r(`${EVD_FOLDER}/${basename(folder)}`);
-    if (existsSync(destFolder)) {
-      rmSync(destFolder, { recursive: true });
-    }
-
-    // 复制文件
-    cpSync(r(folder), destFolder, {
-      recursive: true,
-    });
-
-    console.log(
-      logSymbols.success,
-      `已复制 ${folder} → .evd/${basename(folder)}`
-    );
-  }
-}
