@@ -14,6 +14,13 @@ import { ProviderInterface } from "../commands/hostingProvider/ProviderInterface
 
 export const SPLIT_FOLDER_NAME = "fullCodeZipSplitZips";
 export const FULL_CODE_ZIP_NAME = "fullCode.zip";
+export const LOGIC_SPLIT_FOLDER_NAME = "logicCodeZipSplitZips";
+export const LOGIC_CODE_ZIP_NAME = "logicCode.zip";
+
+const SPLIT_TARGETS = [
+  { zipName: FULL_CODE_ZIP_NAME, splitFolderName: SPLIT_FOLDER_NAME },
+  { zipName: LOGIC_CODE_ZIP_NAME, splitFolderName: LOGIC_SPLIT_FOLDER_NAME },
+] as const;
 
 export type ZipSplitOptions = {
   enabled: boolean;
@@ -36,44 +43,51 @@ export function resolveZipSplitOptions(
 }
 
 /**
- * 按需拆分 fullCode.zip
+ * 按需拆分 fullCode.zip 与 logicCode.zip
  * 已拆分过的目录重复执行不会报错
  */
 export function applyZipSplit(folderPath: string, opts: ZipSplitOptions) {
-  const fullCodeZipPath = join(folderPath, FULL_CODE_ZIP_NAME);
-  const outputFolder = join(folderPath, SPLIT_FOLDER_NAME);
+  for (const { zipName, splitFolderName } of SPLIT_TARGETS) {
+    applySingleZipSplit(folderPath, zipName, splitFolderName, opts);
+  }
+}
+
+function applySingleZipSplit(
+  folderPath: string,
+  zipName: string,
+  splitFolderName: string,
+  opts: ZipSplitOptions
+) {
+  const zipPath = join(folderPath, zipName);
+  const outputFolder = join(folderPath, splitFolderName);
   const indexFilePath = join(outputFolder, "index.json");
-  const alreadySplit =
-    !existsSync(fullCodeZipPath) && existsSync(indexFilePath);
+  const alreadySplit = !existsSync(zipPath) && existsSync(indexFilePath);
 
   if (!opts.enabled) {
     if (alreadySplit) {
       throw new Error(
-        `node_modules/.evd 中的 ${FULL_CODE_ZIP_NAME} 已被拆分，无法再关闭拆分，请重新执行 evd prepare`
+        `node_modules/.evd 中的 ${zipName} 已被拆分，无法再关闭拆分，请重新执行 evd prepare`
       );
     }
 
     //  残留的分片目录会让客户端误判为分片包，去下载并不存在的分片
     if (existsSync(outputFolder)) {
       rmSync(outputFolder, { force: true, maxRetries: 3, recursive: true });
-      console.log(logSymbols.info, `已清理历史分片目录 ${SPLIT_FOLDER_NAME}`);
+      console.log(logSymbols.info, `已清理历史分片目录 ${splitFolderName}`);
     }
     return;
   }
 
   if (alreadySplit) {
-    console.log(
-      logSymbols.info,
-      `${FULL_CODE_ZIP_NAME} 已是分片状态，跳过拆分`
-    );
+    console.log(logSymbols.info, `${zipName} 已是分片状态，跳过拆分`);
     return;
   }
 
-  if (!existsSync(fullCodeZipPath)) {
-    throw new Error(`未找到 ${fullCodeZipPath}，请先执行 evd prepare`);
+  if (!existsSync(zipPath)) {
+    throw new Error(`未找到 ${zipPath}，请先执行 evd prepare`);
   }
 
-  const fileSize = statSync(fullCodeZipPath).size;
+  const fileSize = statSync(zipPath).size;
   const fileSizeInMB = fileSize / (1024 * 1024);
 
   //  先清空该文件夹
@@ -81,15 +95,16 @@ export function applyZipSplit(folderPath: string, opts: ZipSplitOptions) {
   if (existsSync(outputFolder)) {
     rmSync(outputFolder, { force: true, maxRetries: 3, recursive: true });
   }
-  mkdirSync(outputFolder);
 
   if (fileSizeInMB < opts.thresholdMB) return;
+
+  mkdirSync(outputFolder);
 
   const chunkCount = Math.ceil(fileSizeInMB / opts.chunkSizeMB);
   const splitZipsFileName: string[] = [];
 
-  const fileBuffer = readFileSync(fullCodeZipPath);
-  const fileName = (fullCodeZipPath.split(sep).pop() as string).split(".");
+  const fileBuffer = readFileSync(zipPath);
+  const fileName = (zipPath.split(sep).pop() as string).split(".");
   const fileExtension = fileName.pop();
   const baseFileName = fileName.join(".");
 
@@ -106,10 +121,10 @@ export function applyZipSplit(folderPath: string, opts: ZipSplitOptions) {
   writeFileSync(indexFilePath, JSON.stringify(splitZipsFileName));
 
   //  删除源文件
-  forceDeleteSync(fullCodeZipPath);
+  forceDeleteSync(zipPath);
 
   console.log(
     logSymbols.success,
-    `${FULL_CODE_ZIP_NAME} 已拆分为 ${splitZipsFileName.length} 个分片`
+    `${zipName} 已拆分为 ${splitZipsFileName.length} 个分片`
   );
 }

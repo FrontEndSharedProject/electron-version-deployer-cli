@@ -35,6 +35,14 @@ import {
 import { getWhichProvider } from "../cli/helpers/getWhichProvider";
 import { copySourceAndZipFiles } from "../cli/commands/prepare";
 import { runChecks } from "../cli/commands/verify";
+import {
+  applyZipSplit,
+  FULL_CODE_ZIP_NAME,
+  LOGIC_CODE_ZIP_NAME,
+  LOGIC_SPLIT_FOLDER_NAME,
+  resolveZipSplitOptions,
+  SPLIT_FOLDER_NAME,
+} from "../cli/helpers/zipSplit";
 import "../cli/commands/preDeploy";
 
 const assert = {
@@ -1494,6 +1502,282 @@ async function main() {
         process.exitCode = prevExitCode;
       } finally {
         process.chdir(prevCwd);
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "zipSplit: fullCode.zip 与 logicCode.zip 独立按阈值分片、未达阈值或禁用时清理残留分片目录且不留空目录、重复执行幂等、已拆分后关闭分片报错",
+    () => {
+      const workDir = mkdtempSync(join(tmpdir(), "evd-zipsplit-"));
+      try {
+        assert.equal(SPLIT_FOLDER_NAME, "fullCodeZipSplitZips");
+        assert.equal(FULL_CODE_ZIP_NAME, "fullCode.zip");
+        assert.equal(LOGIC_SPLIT_FOLDER_NAME, "logicCodeZipSplitZips");
+        assert.equal(LOGIC_CODE_ZIP_NAME, "logicCode.zip");
+
+        const smallBuf = Buffer.alloc(512 * 1024, 0x41);
+        const largeBuf = Buffer.alloc(2.5 * 1024 * 1024, 0x42);
+
+        const case1Dir = join(workDir, "case1");
+        mkdirSync(join(case1Dir, LOGIC_SPLIT_FOLDER_NAME), { recursive: true });
+        writeFileSync(
+          join(case1Dir, LOGIC_SPLIT_FOLDER_NAME, "index.json"),
+          '["logicCode.part1.zip"]'
+        );
+        writeFileSync(join(case1Dir, FULL_CODE_ZIP_NAME), largeBuf);
+        writeFileSync(join(case1Dir, LOGIC_CODE_ZIP_NAME), smallBuf);
+
+        applyZipSplit(case1Dir, {
+          enabled: true,
+          thresholdMB: 2,
+          chunkSizeMB: 1,
+        });
+
+        assert.equal(existsSync(join(case1Dir, FULL_CODE_ZIP_NAME)), false);
+        const fullIndex1 = JSON.parse(
+          readFileSync(
+            join(case1Dir, SPLIT_FOLDER_NAME, "index.json"),
+            "utf-8"
+          )
+        );
+        assert.equal(
+          JSON.stringify(fullIndex1),
+          JSON.stringify([
+            "fullCode.part1.zip",
+            "fullCode.part2.zip",
+            "fullCode.part3.zip",
+          ])
+        );
+        assert.equal(existsSync(join(case1Dir, LOGIC_CODE_ZIP_NAME)), true);
+        assert.equal(
+          existsSync(join(case1Dir, LOGIC_SPLIT_FOLDER_NAME)),
+          false,
+          "Below-threshold logicCode must not leave stale or empty logicCodeZipSplitZips folder"
+        );
+
+        const case2Dir = join(workDir, "case2");
+        mkdirSync(join(case2Dir, SPLIT_FOLDER_NAME), { recursive: true });
+        writeFileSync(
+          join(case2Dir, SPLIT_FOLDER_NAME, "index.json"),
+          '["fullCode.part1.zip"]'
+        );
+        writeFileSync(join(case2Dir, FULL_CODE_ZIP_NAME), smallBuf);
+        writeFileSync(join(case2Dir, LOGIC_CODE_ZIP_NAME), largeBuf);
+
+        applyZipSplit(case2Dir, {
+          enabled: true,
+          thresholdMB: 2,
+          chunkSizeMB: 1,
+        });
+
+        assert.equal(existsSync(join(case2Dir, FULL_CODE_ZIP_NAME)), true);
+        assert.equal(
+          existsSync(join(case2Dir, SPLIT_FOLDER_NAME)),
+          false,
+          "Below-threshold fullCode must not leave stale or empty fullCodeZipSplitZips folder"
+        );
+        assert.equal(existsSync(join(case2Dir, LOGIC_CODE_ZIP_NAME)), false);
+        const logicIndex2 = JSON.parse(
+          readFileSync(
+            join(case2Dir, LOGIC_SPLIT_FOLDER_NAME, "index.json"),
+            "utf-8"
+          )
+        );
+        assert.equal(
+          JSON.stringify(logicIndex2),
+          JSON.stringify([
+            "logicCode.part1.zip",
+            "logicCode.part2.zip",
+            "logicCode.part3.zip",
+          ])
+        );
+        const mergedLogic2 = Buffer.concat(
+          logicIndex2.map((part: string) =>
+            readFileSync(join(case2Dir, LOGIC_SPLIT_FOLDER_NAME, part))
+          )
+        );
+        assert.equal(mergedLogic2.equals(largeBuf), true);
+
+        applyZipSplit(case2Dir, {
+          enabled: true,
+          thresholdMB: 2,
+          chunkSizeMB: 1,
+        });
+        assert.equal(existsSync(join(case2Dir, LOGIC_CODE_ZIP_NAME)), false);
+        assert.equal(
+          existsSync(join(case2Dir, LOGIC_SPLIT_FOLDER_NAME, "index.json")),
+          true
+        );
+
+        assert.throws(
+          () =>
+            applyZipSplit(case1Dir, {
+              enabled: false,
+              thresholdMB: 2,
+              chunkSizeMB: 1,
+            }),
+          (err) => String(err).includes(FULL_CODE_ZIP_NAME)
+        );
+        assert.throws(
+          () =>
+            applyZipSplit(case2Dir, {
+              enabled: false,
+              thresholdMB: 2,
+              chunkSizeMB: 1,
+            }),
+          (err) => String(err).includes(LOGIC_CODE_ZIP_NAME)
+        );
+
+        const case3Dir = join(workDir, "case3");
+        mkdirSync(join(case3Dir, SPLIT_FOLDER_NAME), { recursive: true });
+        mkdirSync(join(case3Dir, LOGIC_SPLIT_FOLDER_NAME), { recursive: true });
+        writeFileSync(
+          join(case3Dir, SPLIT_FOLDER_NAME, "index.json"),
+          '["fullCode.part1.zip"]'
+        );
+        writeFileSync(
+          join(case3Dir, LOGIC_SPLIT_FOLDER_NAME, "index.json"),
+          '["logicCode.part1.zip"]'
+        );
+        writeFileSync(join(case3Dir, FULL_CODE_ZIP_NAME), smallBuf);
+        writeFileSync(join(case3Dir, LOGIC_CODE_ZIP_NAME), smallBuf);
+
+        applyZipSplit(case3Dir, {
+          enabled: false,
+          thresholdMB: 2,
+          chunkSizeMB: 1,
+        });
+        assert.equal(existsSync(join(case3Dir, SPLIT_FOLDER_NAME)), false);
+        assert.equal(
+          existsSync(join(case3Dir, LOGIC_SPLIT_FOLDER_NAME)),
+          false
+        );
+        assert.equal(existsSync(join(case3Dir, FULL_CODE_ZIP_NAME)), true);
+        assert.equal(existsSync(join(case3Dir, LOGIC_CODE_ZIP_NAME)), true);
+      } finally {
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "verify runChecks: 当本地存在 logicCodeZipSplitZips/index.json 时校验远程增量分片索引及各分片文件",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-verify-logicsplit-"));
+      let missingChunk: string | null = null;
+      const requestedPaths: string[] = [];
+
+      const server = createServer((req, res) => {
+        const urlPath = (req.url || "").split("?")[0];
+        requestedPaths.push(urlPath);
+        if (urlPath === "/package.json") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ name: "my-electron-app", version: "2.0.0" })
+          );
+          return;
+        }
+        if (urlPath === "/changelog.json") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ version: "2.0.0", changes: "<p>ok</p>" }));
+          return;
+        }
+        if (urlPath === "/logicCodeZipSplitZips/index.json") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify(["logicCode.part1.zip", "logicCode.part2.zip"])
+          );
+          return;
+        }
+        if (urlPath === "/logicCode.zip") {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        if (missingChunk && urlPath === missingChunk) {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Length": "1024" });
+        res.end(Buffer.alloc(1024));
+      });
+
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const port = (server.address() as any).port;
+      const remoteUrl = `http://127.0.0.1:${port}`;
+
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({ name: "host-workspace", version: "1.0.0" })
+        );
+        const localLogicSplitDir = join(
+          workDir,
+          "node_modules",
+          ".evd",
+          LOGIC_SPLIT_FOLDER_NAME
+        );
+        mkdirSync(localLogicSplitDir, { recursive: true });
+        writeFileSync(
+          join(localLogicSplitDir, "index.json"),
+          JSON.stringify(["logicCode.part1.zip", "logicCode.part2.zip"])
+        );
+        process.chdir(workDir);
+
+        const okResults = await runChecks(
+          remoteUrl,
+          { name: "my-electron-app", version: "2.0.0" },
+          5000
+        );
+        assert.equal(
+          okResults.every((r) => r.ok),
+          true,
+          `Expected all checks to pass, got: ${JSON.stringify(okResults)}`
+        );
+        assert.equal(
+          requestedPaths.includes("/logicCode.zip"),
+          false,
+          "Should not probe /logicCode.zip when local logicCodeZipSplitZips/index.json exists"
+        );
+        assert.ok(
+          okResults.some(
+            (r) =>
+              r.label === "logicCodeZipSplitZips/index.json" &&
+              r.ok &&
+              r.detail === "2 个分片"
+          )
+        );
+        assert.ok(
+          okResults.some(
+            (r) =>
+              r.label === "logicCodeZipSplitZips/logicCode.part1.zip" && r.ok
+          )
+        );
+        assert.ok(
+          okResults.some(
+            (r) =>
+              r.label === "logicCodeZipSplitZips/logicCode.part2.zip" && r.ok
+          )
+        );
+
+        missingChunk = "/logicCodeZipSplitZips/logicCode.part2.zip";
+        const failResults = await runChecks(
+          remoteUrl,
+          { name: "my-electron-app", version: "2.0.0" },
+          5000
+        );
+        const part2Check = failResults.find(
+          (r) => r.label === "logicCodeZipSplitZips/logicCode.part2.zip"
+        );
+        assert.ok(part2Check);
+        assert.equal(part2Check!.ok, false);
+      } finally {
+        process.chdir(prevCwd);
+        server.close();
         rmSync(workDir, { recursive: true, force: true });
       }
     }

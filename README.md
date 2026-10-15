@@ -277,14 +277,11 @@ export type EVDConfigType = {
     //  package.json 文件路径（相对 folder）
     packageJSON: string;
   };
-  //  额外需要打包的文件夹
-  //  这将会在部署时将文件夹里面的内容，一同部署到服务器上
-  //  文件会被放在根目录的 basename 文件中，比如
-  // 传入 ['public/test'] 这样一个文件夹，那么最终会被放到根目录的
-  // /test 中
-  // 注意:当个文件不能超过 25mb 这是 cloudflare 的限制（仅 cloudflare 适用）
-  // 注意：必须使用相对路径，相对路径谁相对于 evd.config.ts 文件
-  extraFolders: string[] | (() => Promise<string[]>) | (() => string[]);
+  //  额外需要随热更新打包下发的文件夹（支持静态数组、同步函数或异步函数，兼容相对项目根目录路径与绝对路径）
+  //  在 evd prepare 阶段（编译完成后）解析并打入 fullCode.zip 与 logicCode.zip 根层级的 <basename> 目录中，
+  //  比如传入 ['public/test']，会被打入更新包根目录的 test/ 下，
+  //  客户端热更新解压后递归覆盖写入本地 app.getAppPath()/<basename>（同名文件覆盖、新增文件创建，不保留远程裸目录）
+  extraFolders?: string[] | (() => Promise<string[]>) | (() => string[]);
   //  netlify 部署设置
   netlify?: {
     //  网站域名如 https://site.netlify.app
@@ -303,7 +300,7 @@ export type EVDConfigType = {
     //  更新包最终可访问的地址，如 https://cdn.mycorp.com/app
     url: string;
   };
-  //  fullCode.zip 拆分设置
+  //  更新压缩包（fullCode.zip / logicCode.zip）拆分设置
   zipSplit?: {
     //  是否拆分，默认按 provider 推断：cloudflare 为 true，netlify / selfHosted 为 false
     enabled?: boolean;
@@ -330,7 +327,7 @@ export type EVDConfigType = {
 $ evd prepare
 ```
 
-这个命令首先对软件进行编译，然后将一些代码和 changelog 放到 .evd 文件夹中
+这个命令首先对软件进行编译，然后解析 `extraFolders`，并将业务代码、依赖、`extraFolders` 和 changelog 打包写入 `node_modules/.evd` 文件夹中（生成 `fullCode.zip` 与 `logicCode.zip`）。
 
 ### 部署
 
@@ -375,7 +372,7 @@ selfHosted: {
 $ evd preDeploy
 ```
 
-跑完 `deploy` 里的全部检测，并把 `extraFolders` 复制进 `.evd`、按配置整形压缩包，通过后 `node_modules/.evd` 就是可以直接上传的内容。
+跑完 `deploy` 里的全部检测，并按配置对压缩包（`fullCode.zip` / `logicCode.zip`）执行按需分片整形，通过后 `node_modules/.evd` 就是可以直接上传的内容。
 
 **全程无交互**，命中风险项直接报错并 `exit 1`，需要显式加参数放行：
 
@@ -390,7 +387,7 @@ $ evd preDeploy
 | `--min-supported-version <version>` | 显式指定最低支持版本（覆盖配置） |
 | `--force-update` | 将最低支持版本设为当前待部署版本 |
 | `--no-force-update` | 本次不声明最低支持版本（忽略配置） |
-| `--split` / `--no-split` | 覆盖 `configs.zipSplit.enabled` |
+| `--split` / `--no-split` | 覆盖 `configs.zipSplit.enabled`（同时作用于 `fullCode.zip` 与 `logicCode.zip`） |
 | `--timeout <ms>` | 远程请求超时，默认 `10000` |
 
 注意：远程地址**连不上**（DNS 失败、连接被拒、超时）一律报错，`--allow-first-deploy` 也不放行——这正是要暴露的链接问题。
@@ -401,7 +398,7 @@ $ evd preDeploy
 $ evd verify
 ```
 
-上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` / `minSupportedVersion` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`、`fullCode.zip`（或全部分片）均可访问。任一项不通过即 `exit 1`。
+上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` / `minSupportedVersion` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`（或 `logicCodeZipSplitZips` 全部分片）、`fullCode.zip`（或 `fullCodeZipSplitZips` 全部分片）均可访问。任一项不通过即 `exit 1`。
 
 请求全部带 cache-buster，可用 `--retry <n>`、`--retry-delay <s>` 应对 CDN 传播延迟。`--retry` 是**总尝试次数（含首次）**，默认 3 表示最多校验 3 次；`--retry-delay` 是两次尝试之间的间隔秒数，默认 5。
 
@@ -421,11 +418,11 @@ deploy:
 
 ### 关于压缩包拆分
 
-`fullCode.zip` 超过 25MB 会被 Cloudflare Pages 拒绝，因此 cloudflare 下默认拆分成多个分片 + 一个 `fullCodeZipSplitZips/index.json` 描述文件，客户端会自动识别并合并下载。
+单文件超过 25MB 会被 Cloudflare Pages 拒绝，因此 `cloudflare` 下默认开启分片：对 `fullCode.zip` 与 `logicCode.zip` 按各自体积独立判断是否达到 `thresholdMB`（默认 24MB），超过时按 `chunkSizeMB`（默认 20MB）拆分为多个分片 + `index.json` 描述文件（`fullCodeZipSplitZips/fullCode.partN.zip` + `fullCodeZipSplitZips/index.json`、`logicCodeZipSplitZips/logicCode.partN.zip` + `logicCodeZipSplitZips/index.json`），并删除对应原整包。客户端下载全量包或增量包时会自动探测对应分片索引并按序下载合并。
 
-自建服务器没有这个限制，`selfHosted` 与 `netlify` 默认**不拆分**。需要时用 `configs.zipSplit` 或 `--split` 打开。
+自建服务器没有这个限制，`selfHosted` 与 `netlify` 默认**不拆分**。需要时用 `configs.zipSplit` 或 `--split` 打开，也可通过 `--no-split` 关闭。
 
-> 关掉拆分时，`.evd` 里遗留的 `fullCodeZipSplitZips` 目录会被自动清理——否则它会被一起传上去，客户端读到旧的 `index.json` 就会去下载并不存在的分片。
+> 关掉拆分或包体积未达到分片阈值时，`.evd` 里遗留的 `fullCodeZipSplitZips` / `logicCodeZipSplitZips` 目录会被自动清理——否则旧的 `index.json` 被传上去后，客户端会误去下载并不存在的分片。
 
 ### 手动检查版本更新
 

@@ -31,8 +31,8 @@ program
   .option("--min-supported-version <version>", "显式指定最低支持版本")
   .option("--force-update", "将最低支持版本设为当前待部署版本")
   .option("--no-force-update", "本次部署不声明最低支持版本")
-  .option("--split", "强制拆分 fullCode.zip")
-  .option("--no-split", "不拆分 fullCode.zip")
+  .option("--split", "强制拆分更新压缩包（fullCode.zip / logicCode.zip）")
+  .option("--no-split", "不拆分更新压缩包（fullCode.zip / logicCode.zip）")
   .option("--timeout <ms>", "远程请求超时时间", "10000")
   .action(async (options, command) => {
     try {

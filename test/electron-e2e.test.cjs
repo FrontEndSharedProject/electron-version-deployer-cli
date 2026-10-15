@@ -95,7 +95,29 @@ function startMockUpdateServer(zipPath, remotePkg, options = {}) {
         res.end(body);
         return;
       }
-      if (urlPath === "/logicCode.zip" || urlPath === "/fullCode.zip") {
+      if (
+        options.serverAssetsDir &&
+        (urlPath.startsWith("/logicCodeZipSplitZips/") ||
+          urlPath.startsWith("/fullCodeZipSplitZips/"))
+      ) {
+        const assetPath = join(options.serverAssetsDir, urlPath.slice(1));
+        if (existsSync(assetPath)) {
+          const buf = readFileSync(assetPath);
+          const contentType = urlPath.endsWith(".json")
+            ? "application/json"
+            : "application/zip";
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": buf.length,
+          });
+          res.end(buf);
+          return;
+        }
+      }
+      if (
+        (urlPath === "/logicCode.zip" || urlPath === "/fullCode.zip") &&
+        existsSync(zipPath)
+      ) {
         const sendZip = () => {
           const buf = readFileSync(zipPath);
           res.writeHead(200, {
@@ -157,12 +179,35 @@ function runElectronScenario(scenarioName, setupOptions) {
       ...(setupOptions.extraZipEntries || {}),
     });
 
+    if (setupOptions.splitLogicZipChunks > 1) {
+      const splitDir = join(serverAssetsDir, "logicCodeZipSplitZips");
+      mkdirSync(splitDir, { recursive: true });
+      const fullBuf = readFileSync(zipPath);
+      const chunkCount = setupOptions.splitLogicZipChunks;
+      const chunkSize = Math.ceil(fullBuf.length / chunkCount);
+      const partNames = [];
+      for (let i = 0; i < chunkCount; i++) {
+        const start = i * chunkSize;
+        const end = Math.min((i + 1) * chunkSize, fullBuf.length);
+        const partName = `logicCode.part${i + 1}.zip`;
+        partNames.push(partName);
+        writeFileSync(join(splitDir, partName), fullBuf.subarray(start, end));
+      }
+      writeFileSync(
+        join(splitDir, "index.json"),
+        JSON.stringify(partNames),
+        "utf-8"
+      );
+      rmSync(zipPath, { force: true });
+    }
+
     const { server, url: remoteUrl } = await startMockUpdateServer(
       zipPath,
       remotePkg,
       {
         downloadDelayMs: setupOptions.downloadDelayMs || 0,
         remotePkgFilePath,
+        serverAssetsDir,
       }
     );
 
@@ -1577,6 +1622,91 @@ async function main() {
 
     console.log(
       `✅ PASS (${Date.now() - start}ms): E2E 场景 12 - extraFolders 客户端热更新落盘（同名文件覆盖、新增嵌套文件写入、历史文件保留）`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result, updatedPkgAfter, appFilesAfter } =
+      await runElectronScenario("split-logic-code-with-extra-folders", {
+        splitLogicZipChunks: 2,
+        initialAppFiles: {
+          "resources/config.json": '{"theme":"light"}',
+          "resources/legacy.txt": "keep-legacy-file",
+        },
+        extraZipEntries: {
+          "resources/config.json": '{"theme":"dark"}',
+          "resources/nested/new-icon.svg": '<svg id="new"/>',
+        },
+        readAppFiles: [
+          "resources/config.json",
+          "resources/nested/new-icon.svg",
+          "resources/legacy.txt",
+          "logicCode.part1.zip",
+          "logicCode.part2.zip",
+        ],
+      });
+
+    assertEqual(result.hasUpdate, true);
+    assertEqual(result.capturedOnError, null);
+    assertEqual(updatedPkgAfter.version, "2.0.0");
+
+    const progressEvents = result.domSnapshot.progressEvents;
+    assertOk(
+      progressEvents.some(
+        (e) => e.currentItem === "logicCodeZipSplitZips/index.json"
+      ),
+      "应探测远程 logicCodeZipSplitZips/index.json"
+    );
+    assertOk(
+      progressEvents.some(
+        (e) =>
+          e.currentItem === "logicCodeZipSplitZips/logicCode.part1.zip" &&
+          String(e.progressText).includes("分片 1/2")
+      ),
+      "应上报分片 1/2 下载进度"
+    );
+    assertOk(
+      progressEvents.some(
+        (e) =>
+          e.currentItem === "logicCodeZipSplitZips/logicCode.part2.zip" &&
+          String(e.progressText).includes("分片 2/2")
+      ),
+      "应上报分片 2/2 下载进度"
+    );
+    assertOk(
+      result.domSnapshot.stepValues.download.includes("2 个分片"),
+      `download 完成状态应包含分片数，实际为: ${result.domSnapshot.stepValues.download}`
+    );
+
+    assertEqual(
+      appFilesAfter["logicCode.part1.zip"],
+      null,
+      "临时分片文件 logicCode.part1.zip 应在 finally 中被清理"
+    );
+    assertEqual(
+      appFilesAfter["logicCode.part2.zip"],
+      null,
+      "临时分片文件 logicCode.part2.zip 应在 finally 中被清理"
+    );
+    assertEqual(
+      appFilesAfter["resources/config.json"],
+      '{"theme":"dark"}',
+      "分片合并解压后 extraFolders 原有同名文件应被覆盖更新"
+    );
+    assertEqual(
+      appFilesAfter["resources/nested/new-icon.svg"],
+      '<svg id="new"/>',
+      "分片合并解压后 extraFolders 新增嵌套子目录与文件应成功写入"
+    );
+    assertEqual(
+      appFilesAfter["resources/legacy.txt"],
+      "keep-legacy-file",
+      "分片合并解压后 extraFolders 本地原有的其它历史文件应保留不删"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 13 - 依赖未变更时客户端拉取 logicCodeZipSplitZips 分片增量包、上报分片进度、合并清理临时文件并完成含 extraFolders 的覆盖安装`
     );
   }
 }

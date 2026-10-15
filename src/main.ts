@@ -718,44 +718,42 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
   //  如果是 cloudflare 会出现 fullCode.zip 被拆分在 fullCodeZipSplitZips 文件夹中的问题
   //  原因是 cloudflare 只支持最大 25m 的文件上传
   //  需要判断下，如果远程是分段的 zip，就下载分段文件并且合并
-  let fullCodeSplitIndexFile: false | string[] = false;
-  if (zipFile === "fullCode.zip") {
-    tracker.update({
-      stage: "download",
-      stageTitle: "正在检查远程分片配置...",
-      percent: 10,
-      progressText: "探测分片索引",
-      currentItem: "fullCodeZipSplitZips/index.json",
-      stepValues: {
-        download: "探测分片中...",
-      },
+  const splitFolder =
+    zipFile === "fullCode.zip"
+      ? "fullCodeZipSplitZips"
+      : "logicCodeZipSplitZips";
+  let splitIndexFile: false | string[] = false;
+  tracker.update({
+    stage: "download",
+    stageTitle: "正在检查远程分片配置...",
+    percent: 10,
+    progressText: "探测分片索引",
+    currentItem: `${splitFolder}/index.json`,
+    stepValues: {
+      download: "探测分片中...",
+    },
+  });
+  try {
+    splitIndexFile = await netRequest({
+      url: joinRemoteUrl(
+        remoteUrl,
+        `${splitFolder}/index.json?hash=${Math.random()}`
+      ),
+      responseType: "json",
+      timeoutMs: requestTimeout,
+      phase: EVDErrorPhaseEnum.DOWNLOAD,
     });
-    try {
-      fullCodeSplitIndexFile = await netRequest({
-        url: joinRemoteUrl(
-          remoteUrl,
-          `fullCodeZipSplitZips/index.json?hash=${Math.random()}`
-        ),
-        responseType: "json",
-        timeoutMs: requestTimeout,
-        phase: EVDErrorPhaseEnum.DOWNLOAD,
-      });
-    } catch (e) {}
-  }
+  } catch (e) {}
 
   //  如果满足远程分割的条件
-  if (
-    zipFile === "fullCode.zip" &&
-    Array.isArray(fullCodeSplitIndexFile) &&
-    fullCodeSplitIndexFile.length > 0
-  ) {
-    const totalChunks = fullCodeSplitIndexFile.length;
-    const tmpFilePaths = fullCodeSplitIndexFile.map((fileName) =>
+  if (Array.isArray(splitIndexFile) && splitIndexFile.length > 0) {
+    const totalChunks = splitIndexFile.length;
+    const tmpFilePaths = splitIndexFile.map((fileName) =>
       join(appPath, fileName)
     );
 
     try {
-      for (const [index, fileName] of fullCodeSplitIndexFile.entries()) {
+      for (const [index, fileName] of splitIndexFile.entries()) {
         const chunkNum = index + 1;
         tracker.update({
           stage: "download",
@@ -764,7 +762,7 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
           completed: chunkNum - 1,
           total: totalChunks,
           progressText: `分片 ${chunkNum}/${totalChunks}`,
-          currentItem: `fullCodeZipSplitZips/${fileName}`,
+          currentItem: `${splitFolder}/${fileName}`,
           stepValues: {
             download: `分片 ${chunkNum}/${totalChunks}`,
           },
@@ -773,7 +771,7 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
         await downloadFile({
           url: joinRemoteUrl(
             remoteUrl,
-            `fullCodeZipSplitZips/${fileName}?hash=${Math.random()}`
+            `${splitFolder}/${fileName}?hash=${Math.random()}`
           ),
           destPath: tmpFilePaths[index],
           stallTimeoutMs: downloadStallTimeout,
@@ -794,7 +792,7 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
                 completed: loadedBytes,
                 total: totalBytes || undefined,
                 progressText: label,
-                currentItem: `fullCodeZipSplitZips/${fileName}`,
+                currentItem: `${splitFolder}/${fileName}`,
                 stepValues: {
                   download: label,
                 },

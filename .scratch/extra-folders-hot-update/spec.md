@@ -1,6 +1,6 @@
 # Extra Folders 客户端热更新与双包分片支持
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Problem Statement
 
