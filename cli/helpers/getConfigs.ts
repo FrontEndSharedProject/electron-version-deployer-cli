@@ -3,14 +3,11 @@
  */
 import { EVDConfigType } from "@/types/EVDConfigType";
 import { r } from "../utils";
+import { CLI_NAME, CONFIG_FILE_NAME } from "@/const";
 import { existsSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 import { build } from "vite";
 import vm from "node:vm";
-import pkg from "../../package.json";
-
-const CONFIG_FILE_NAME = "evd.config.js";
-const CLI_NAME = pkg.name;
 
 export async function getConfigs(): Promise<EVDConfigType> {
   const configFilePath: string = r(CONFIG_FILE_NAME);

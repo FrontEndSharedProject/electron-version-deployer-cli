@@ -1298,6 +1298,19 @@ async function main() {
         mkdirSync(staleRawDir, { recursive: true });
         writeFileSync(join(staleRawDir, "stale.txt"), "stale");
 
+        const staleFullSplitDir = join(evdFolder, SPLIT_FOLDER_NAME);
+        const staleLogicSplitDir = join(evdFolder, LOGIC_SPLIT_FOLDER_NAME);
+        mkdirSync(staleFullSplitDir, { recursive: true });
+        mkdirSync(staleLogicSplitDir, { recursive: true });
+        writeFileSync(
+          join(staleFullSplitDir, "index.json"),
+          '["fullCode.part1.zip"]'
+        );
+        writeFileSync(
+          join(staleLogicSplitDir, "index.json"),
+          '["logicCode.part1.zip"]'
+        );
+
         process.chdir(workDir);
 
         const baseConfigs = {
@@ -1322,6 +1335,16 @@ async function main() {
           existsSync(staleRawDir),
           false,
           "Stale raw folder in node_modules/.evd/<basename> should be cleaned up"
+        );
+        assert.equal(
+          existsSync(staleFullSplitDir),
+          false,
+          "Stale fullCodeZipSplitZips in node_modules/.evd/ should be cleaned up by prepare"
+        );
+        assert.equal(
+          existsSync(staleLogicSplitDir),
+          false,
+          "Stale logicCodeZipSplitZips in node_modules/.evd/ should be cleaned up by prepare"
         );
 
         const unzipFull1 = join(workDir, "unzip-full-1");

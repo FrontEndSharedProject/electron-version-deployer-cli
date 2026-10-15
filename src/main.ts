@@ -15,7 +15,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
-import { CLI_NAME } from "@/const";
+import {
+  CLI_NAME,
+  FULL_CODE_ZIP_NAME,
+  LOGIC_CODE_ZIP_NAME,
+  LOGIC_SPLIT_FOLDER_NAME,
+  SPLIT_FOLDER_NAME,
+} from "@/const";
 import installerCodeStr from "./installer?raw";
 import templateHtmlStr from "../public/templates/newVersionDialog.html?raw";
 import { platform } from "node:process";
@@ -678,7 +684,10 @@ async function installNewVersion(
     cacheCurrentPkgJSON?.dependencies
   );
 
-  await installPkg(!isDepsEqual ? "fullCode.zip" : "logicCode.zip", tracker);
+  await installPkg(
+    !isDepsEqual ? FULL_CODE_ZIP_NAME : LOGIC_CODE_ZIP_NAME,
+    tracker
+  );
 }
 
 async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
@@ -716,9 +725,9 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
   }
 
   const splitFolder =
-    zipFile === "fullCode.zip"
-      ? "fullCodeZipSplitZips"
-      : "logicCodeZipSplitZips";
+    zipFile === FULL_CODE_ZIP_NAME
+      ? SPLIT_FOLDER_NAME
+      : LOGIC_SPLIT_FOLDER_NAME;
   let splitIndexList: false | string[] = false;
   tracker.update({
     stage: "download",

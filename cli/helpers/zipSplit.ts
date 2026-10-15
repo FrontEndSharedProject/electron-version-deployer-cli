@@ -11,16 +11,21 @@ import {
 import logSymbols from "log-symbols";
 import { forceDeleteSync } from "@/utils/utils";
 import { ProviderInterface } from "../commands/hostingProvider/ProviderInterface";
+import {
+  FULL_CODE_ZIP_NAME,
+  LOGIC_CODE_ZIP_NAME,
+  LOGIC_SPLIT_FOLDER_NAME,
+  SPLIT_FOLDER_NAME,
+  SPLIT_TARGETS,
+} from "@/const";
 
-export const SPLIT_FOLDER_NAME = "fullCodeZipSplitZips";
-export const FULL_CODE_ZIP_NAME = "fullCode.zip";
-export const LOGIC_SPLIT_FOLDER_NAME = "logicCodeZipSplitZips";
-export const LOGIC_CODE_ZIP_NAME = "logicCode.zip";
-
-export const SPLIT_TARGETS = [
-  { zipName: LOGIC_CODE_ZIP_NAME, splitFolderName: LOGIC_SPLIT_FOLDER_NAME },
-  { zipName: FULL_CODE_ZIP_NAME, splitFolderName: SPLIT_FOLDER_NAME },
-] as const;
+export {
+  FULL_CODE_ZIP_NAME,
+  LOGIC_CODE_ZIP_NAME,
+  LOGIC_SPLIT_FOLDER_NAME,
+  SPLIT_FOLDER_NAME,
+  SPLIT_TARGETS,
+};
 
 export type ZipSplitOptions = {
   enabled: boolean;

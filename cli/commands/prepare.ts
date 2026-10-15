@@ -25,6 +25,11 @@ import {
   EVD_FOLDER,
   resolveMinSupportedVersion,
 } from "../helpers/deployChecks";
+import {
+  FULL_CODE_ZIP_NAME,
+  LOGIC_CODE_ZIP_NAME,
+  SPLIT_TARGETS,
+} from "@/const";
 
 program
   .command("prepare")
@@ -101,9 +106,9 @@ export async function resolveExtraFolders(
 }
 
 export async function copySourceAndZipFiles(configs: EVDConfigType) {
-  const logicCodeZipPath = r("node_modules/.evd/logicCode.zip");
+  const logicCodeZipPath = r(`${EVD_FOLDER}/${LOGIC_CODE_ZIP_NAME}`);
   //  including node_modules
-  const fullCodeZipPath = r("node_modules/.evd/fullCode.zip");
+  const fullCodeZipPath = r(`${EVD_FOLDER}/${FULL_CODE_ZIP_NAME}`);
 
   const nodeModulesPath = join(
     resolve(configs.sources.folder),
@@ -156,6 +161,13 @@ export async function copySourceAndZipFiles(configs: EVDConfigType) {
     const staleRawFolder = r(`${EVD_FOLDER}/${basename(extraFolder)}`);
     if (existsSync(staleRawFolder)) {
       rmSync(staleRawFolder, { recursive: true, force: true });
+    }
+  }
+
+  for (const { splitFolderName } of SPLIT_TARGETS) {
+    const staleSplitFolder = r(`${EVD_FOLDER}/${splitFolderName}`);
+    if (existsSync(staleSplitFolder)) {
+      rmSync(staleSplitFolder, { recursive: true, force: true });
     }
   }
 
