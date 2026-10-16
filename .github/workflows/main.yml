@@ -12,16 +12,18 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    #  固定系统版本，避免 ubuntu-latest 迁移到新系统时运行环境突变
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v6
         with:
-          version: 8.6.2
+          #  与生成 pnpm-lock.yaml 的版本保持一致，pnpm 8 读不了 v9 lockfile 会忽略它重新解析
+          version: 9.14.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -32,8 +34,20 @@ jobs:
       - name: Update npm
         run: npm install -g npm@11
 
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run build
-      - run: npm publish --provenance --access public
+
+      - name: Check published version
+        id: published
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME@$VERSION 已发布，跳过 npm publish"
+          fi
+
+      - if: steps.published.outputs.exists != 'true'
+        run: npm publish --provenance --access public
