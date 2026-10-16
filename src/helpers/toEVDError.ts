@@ -88,13 +88,11 @@ export function detectUpdateEnvironment(appPath: string) {
     filePath: appPath,
   };
 
-  if (process.platform === "darwin") {
-    if (appPath.includes("/AppTranslocation/")) {
-      throw new EVDError(EVDErrorCodeEnum.APP_TRANSLOCATION, baseCtx);
-    }
-    if (appPath.startsWith("/Volumes/")) {
-      throw new EVDError(EVDErrorCodeEnum.READ_ONLY_VOLUME, baseCtx);
-    }
+  if (
+    process.platform === "darwin" &&
+    appPath.includes("/AppTranslocation/")
+  ) {
+    throw new EVDError(EVDErrorCodeEnum.APP_TRANSLOCATION, baseCtx);
   }
 
   try {

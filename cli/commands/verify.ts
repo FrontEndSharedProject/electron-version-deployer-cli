@@ -146,22 +146,59 @@ export async function runChecks(
   results.push(await checkFile(url, "changelogs.html", requestOptions));
 
   for (const { zipName, splitFolderName } of SPLIT_TARGETS) {
-    const localSplitIndex = r(`${EVD_FOLDER}/${splitFolderName}/index.json`);
-    if (existsSync(localSplitIndex)) {
+    const localSplitIndexPath = r(
+      `${EVD_FOLDER}/${splitFolderName}/index.json`
+    );
+    if (existsSync(localSplitIndexPath)) {
+      const localSplitIndex: string[] = JSON.parse(
+        readFileSync(localSplitIndexPath, "utf-8")
+      );
       results.push(
-        ...(await checkSplitZips(url, splitFolderName, requestOptions))
+        ...(await checkSplitZips(
+          url,
+          splitFolderName,
+          localSplitIndex,
+          requestOptions
+        ))
       );
     } else {
       results.push(await checkFile(url, zipName, requestOptions));
+      results.push(
+        await checkNoStaleSplitIndex(url, splitFolderName, requestOptions)
+      );
     }
   }
 
   return results;
 }
 
+//  客户端优先使用远程分片清单，本地未分片时远程残留的旧清单会让客户端装回旧代码
+async function checkNoStaleSplitIndex(
+  url: string,
+  splitFolderName: string,
+  requestOptions: { timeoutMs: number; noCache: boolean }
+): Promise<CheckResult> {
+  const indexPath = `${splitFolderName}/index.json`;
+  const remoteIndex = await fetchRemoteJSON<string[]>(
+    joinRemoteUrl(url, indexPath),
+    requestOptions
+  );
+
+  if (Array.isArray(remoteIndex.data) && remoteIndex.data.length > 0) {
+    return {
+      label: indexPath,
+      ok: false,
+      detail: `远程残留历史分片清单（${remoteIndex.data.length} 个分片），客户端会优先下载这些旧分片，请删除远程 ${splitFolderName} 目录`,
+    };
+  }
+
+  return { label: indexPath, ok: true, detail: "无残留分片清单" };
+}
+
 async function checkSplitZips(
   url: string,
   splitFolderName: string,
+  localSplitIndex: string[],
   requestOptions: { timeoutMs: number; noCache: boolean }
 ): Promise<CheckResult[]> {
   const indexPath = `${splitFolderName}/index.json`;
@@ -176,6 +213,16 @@ async function checkSplitZips(
         label: indexPath,
         ok: false,
         detail: remoteIndex.reason ?? "内容不是分片列表",
+      },
+    ];
+  }
+
+  if (JSON.stringify(remoteIndex.data) !== JSON.stringify(localSplitIndex)) {
+    return [
+      {
+        label: indexPath,
+        ok: false,
+        detail: `与本地分片清单不一致，远程 ${remoteIndex.data.length} 个分片，本地 ${localSplitIndex.length} 个分片`,
       },
     ];
   }

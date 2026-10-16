@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠️ 破坏性变更
+
+- `extraFolders` 不再由 `evd deploy` / `evd preDeploy` 原样复制进 `node_modules/.evd/<basename>` 部署到远程服务器，改为由 `evd prepare` 打进 `fullCode.zip` 与 `logicCode.zip` 根层级的 `<basename>/`，客户端热更新后写入 `app.getAppPath()/<basename>`。依赖 `<remoteUrl>/<basename>/...` 托管静态文件的项目，升级后下一次部署这些地址会 404，迁移方式见 README「下一版本升级须知」。
+
 ## [0.5.2] - 2026-09-22
 
 ### 修复

@@ -201,6 +201,10 @@ function runElectronScenario(scenarioName, setupOptions) {
       rmSync(zipPath, { force: true });
     }
 
+    if (setupOptions.removeServerZip) {
+      rmSync(zipPath, { force: true });
+    }
+
     const { server, url: remoteUrl } = await startMockUpdateServer(
       zipPath,
       remotePkg,
@@ -294,6 +298,8 @@ let exitIntercepted = false;
 const exitCalls = [];
 const lifecycleOrder = [];
 let onBeforeInstallHook = null;
+const forceExitHookCalls = [];
+let pendingForceExitNext = null;
 let lastFocusedWindow = null;
 const focusHistory = [];
 
@@ -381,6 +387,13 @@ app.whenReady().then(async () => {
           message: err.message,
         };
       },
+      ${
+        setupOptions.onBeforeForceExitScript
+          ? `onBeforeForceExit(next) {
+        ${setupOptions.onBeforeForceExitScript}
+      },`
+          : ""
+      }
     });
 
     if (MAKE_APP_DIR_READONLY) {
@@ -615,11 +628,18 @@ app.whenReady().then(async () => {
               : null;
           }
         }
+        const appPathsExist = {};
+        if (Array.isArray(setupOptions.checkAppPathsExist)) {
+          for (const relPath of setupOptions.checkAppPathsExist) {
+            appPathsExist[relPath] = existsSync(join(appDir, relPath));
+          }
+        }
         resolveScenario({
           result,
           updatedPkgAfter,
           featureAAfter,
           appFilesAfter,
+          appPathsExist,
           appDir,
         });
       } catch (err) {
@@ -1719,6 +1739,191 @@ async function main() {
 
     console.log(
       `✅ PASS (${Date.now() - start}ms): E2E 场景 13 - 依赖未变更时客户端拉取 logicCodeZipSplitZips 分片增量包、上报分片进度、合并清理临时文件并完成含 extraFolders 的覆盖安装`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: missingVersionRes } = await runElectronScenario(
+      "remote-missing-version",
+      {
+        beforeInitialCheckScript: `
+          setRemotePkg({ version: undefined });
+          let checkResult = null;
+          let checkError = null;
+          try {
+            checkResult = await EVDCheckUpdate();
+          } catch (e) {
+            checkError = { code: e.code, phase: e.phase, url: e.url };
+          }
+          await new Promise((r) => setTimeout(r, 300));
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({
+              checkResult,
+              checkError,
+              windowCount: BrowserWindow.getAllWindows().length,
+            }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertEqual(
+      missingVersionRes.checkResult,
+      null,
+      "远程 package.json 缺少 version 时不应判定为有新版本"
+    );
+    assertOk(missingVersionRes.checkError, "EVDCheckUpdate 应 reject");
+    assertEqual(missingVersionRes.checkError.code, "REMOTE_INVALID_JSON");
+    assertEqual(missingVersionRes.checkError.phase, "check");
+    assertOk(
+      String(missingVersionRes.checkError.url).endsWith("/package.json"),
+      `错误 url 应指向 package.json，实际为: ${missingVersionRes.checkError.url}`
+    );
+    assertEqual(
+      missingVersionRes.windowCount,
+      0,
+      "远程 package.json 缺少 version 时不应弹出更新窗口"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 14 - 远程 package.json 缺少 version 时 EVDCheckUpdate 抛 REMOTE_INVALID_JSON 且不弹更新窗口`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result, appPathsExist } = await runElectronScenario(
+      "download-failure-cleans-temp",
+      {
+        removeServerZip: true,
+        checkAppPathsExist: ["evdUnzip.zip", "evdUnzip"],
+      }
+    );
+
+    assertOk(result.capturedOnError, "下载失败应触发 onError");
+    assertEqual(result.capturedOnError.code, "REMOTE_NOT_FOUND");
+    assertEqual(result.capturedOnError.phase, "download");
+    assertEqual(result.domSnapshot.errorDisplay, "flex");
+    assertEqual(
+      appPathsExist["evdUnzip.zip"],
+      false,
+      "下载失败后不应残留 evdUnzip.zip"
+    );
+    assertEqual(
+      appPathsExist["evdUnzip"],
+      false,
+      "下载失败后不应残留 evdUnzip/ 目录"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 15 - 下载阶段失败（远程 404）时清理 evdUnzip.zip 与 evdUnzip/ 临时文件并展示错误面板`
+    );
+  }
+
+  {
+    const start = Date.now();
+    const { result: hookRes } = await runElectronScenario("force-exit-hook", {
+      localVersion: "1.0.0",
+      remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+      stubWinClose: false,
+      onBeforeForceExitScript: `
+        forceExitHookCalls.push(Date.now());
+        pendingForceExitNext = next;
+      `,
+      customActionScript: `
+        const records = {};
+
+        await dialogWin.webContents.executeJavaScript("document.querySelector('#skipBtn').click()");
+        await new Promise((r) => setTimeout(r, 60));
+        records.afterSkip = {
+          hookCalls: forceExitHookCalls.length,
+          exitCalls: exitCalls.slice(),
+        };
+
+        dialogWin.close();
+        await dialogWin.webContents.executeJavaScript("document.querySelector('#skipBtn').click()");
+        await new Promise((r) => setTimeout(r, 60));
+        records.afterRepeat = {
+          hookCalls: forceExitHookCalls.length,
+          exitCalls: exitCalls.slice(),
+          dialogDestroyed: dialogWin.isDestroyed(),
+        };
+
+        pendingForceExitNext();
+        pendingForceExitNext();
+        records.afterNext = { exitCalls: exitCalls.slice() };
+
+        writeFileSync(RESULT_PATH, JSON.stringify({ records }, null, 2), "utf-8");
+        setTimeout(() => origExit(0), 30);
+        return;
+      `,
+    });
+
+    assertEqual(
+      hookRes.records.afterSkip.hookCalls,
+      1,
+      "点击退出软件应调用一次 onBeforeForceExit"
+    );
+    assertEqual(
+      hookRes.records.afterSkip.exitCalls.length,
+      0,
+      "调用 next() 之前不应调用 app.exit"
+    );
+    assertEqual(
+      hookRes.records.afterRepeat.hookCalls,
+      1,
+      "等待 next() 期间重复关闭或点击退出不应重复调用 onBeforeForceExit"
+    );
+    assertEqual(hookRes.records.afterRepeat.exitCalls.length, 0);
+    assertEqual(
+      hookRes.records.afterRepeat.dialogDestroyed,
+      false,
+      "等待 next() 期间弹窗不应被销毁"
+    );
+    assertEqual(
+      JSON.stringify(hookRes.records.afterNext.exitCalls),
+      "[0]",
+      "调用 next() 后应只调用一次 app.exit(0)"
+    );
+
+    const { result: throwRes } = await runElectronScenario(
+      "force-exit-hook-throws",
+      {
+        localVersion: "1.0.0",
+        remotePkgOverrides: { minSupportedVersion: "1.5.0" },
+        stubWinClose: false,
+        onBeforeForceExitScript: `
+          forceExitHookCalls.push(Date.now());
+          throw new Error("save failed");
+        `,
+        customActionScript: `
+          await dialogWin.webContents.executeJavaScript("document.querySelector('#skipBtn').click()");
+          await new Promise((r) => setTimeout(r, 60));
+          writeFileSync(
+            RESULT_PATH,
+            JSON.stringify({ hookCalls: forceExitHookCalls.length, exitCalls }, null, 2),
+            "utf-8"
+          );
+          setTimeout(() => origExit(0), 30);
+          return;
+        `,
+      }
+    );
+
+    assertEqual(throwRes.hookCalls, 1);
+    assertEqual(
+      JSON.stringify(throwRes.exitCalls),
+      "[0]",
+      "onBeforeForceExit 抛错时仍应调用 app.exit(0) 退出"
+    );
+
+    console.log(
+      `✅ PASS (${Date.now() - start}ms): E2E 场景 16 - 强制更新退出前回调 onBeforeForceExit：调用 next() 后才 app.exit(0)，等待期间重复退出不重复回调，回调抛错时直接退出`
     );
   }
 }

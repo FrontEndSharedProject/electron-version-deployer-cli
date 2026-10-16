@@ -3,14 +3,16 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   EVDErrorCodeEnum,
   EVDErrorPhaseEnum,
@@ -171,21 +173,73 @@ async function main() {
     );
 
     await runTest(
-      "detectUpdateEnvironment: 识别 macOS /Volumes/ DMG 只读挂载卷路径",
+      "detectUpdateEnvironment: 真实只读 DMG 卷 (EROFS) -> READ_ONLY_VOLUME，/Volumes/ 下可写目录正常通过",
       () => {
-        const fakeVolumesPath =
-          "/Volumes/MyApp Installer/MyApp.app/Contents/Resources/app";
-        assert.throws(
-          () => detectUpdateEnvironment(fakeVolumesPath),
-          (err: unknown) => {
-            assert.ok(isEVDError(err));
-            assert.equal(err.code, EVDErrorCodeEnum.READ_ONLY_VOLUME);
-            assert.equal(err.phase, EVDErrorPhaseEnum.INSTALL);
-            assert.equal(err.filePath, fakeVolumesPath);
-            assert.ok(err.message.includes("DMG 安装镜像"));
-            return true;
+        const workDir = mkdtempSync(join(tmpdir(), "evd-volumes-"));
+        let mountPoint = "";
+        try {
+          const bootVolumeName = readdirSync("/Volumes").find((name) => {
+            try {
+              return realpathSync(join("/Volumes", name)) === "/";
+            } catch (_) {
+              return false;
+            }
+          });
+          if (bootVolumeName) {
+            detectUpdateEnvironment(
+              join("/Volumes", bootVolumeName, realpathSync(workDir))
+            );
           }
-        );
+
+          const dmgPath = join(workDir, "evd-readonly.dmg");
+          execFileSync(
+            "hdiutil",
+            [
+              "create",
+              "-size",
+              "2m",
+              "-fs",
+              "HFS+",
+              "-volname",
+              "EVDReadOnlyTest",
+              dmgPath,
+            ],
+            { stdio: "ignore" }
+          );
+          const attachOutput = execFileSync(
+            "hdiutil",
+            ["attach", "-readonly", "-nobrowse", dmgPath],
+            { encoding: "utf-8" }
+          );
+          mountPoint = (
+            attachOutput.trim().split("\n").pop()?.split("\t").pop() ?? ""
+          ).trim();
+          assert.ok(
+            mountPoint.startsWith("/Volumes/"),
+            `Unexpected mount point: ${mountPoint}`
+          );
+
+          assert.throws(
+            () => detectUpdateEnvironment(mountPoint),
+            (err: unknown) => {
+              assert.ok(isEVDError(err));
+              assert.equal(err.code, EVDErrorCodeEnum.READ_ONLY_VOLUME);
+              assert.equal(err.phase, EVDErrorPhaseEnum.INSTALL);
+              assert.equal(err.filePath, mountPoint);
+              assert.ok(err.message.includes("DMG 安装镜像"));
+              return true;
+            }
+          );
+        } finally {
+          if (mountPoint) {
+            try {
+              execFileSync("hdiutil", ["detach", mountPoint, "-force"], {
+                stdio: "ignore",
+              });
+            } catch (_) {}
+          }
+          rmSync(workDir, { recursive: true, force: true });
+        }
       }
     );
   }
@@ -1013,7 +1067,7 @@ async function main() {
           res.end(JSON.stringify({ version: "2.0.0", changes: "<p>ok</p>" }));
           return;
         }
-        res.writeHead(200, { "Content-Length": "16" });
+        res.writeHead(200, { "Content-Length": "2" });
         res.end("ok");
       });
 
@@ -1802,6 +1856,132 @@ async function main() {
         );
         assert.ok(part2Check);
         assert.equal(part2Check!.ok, false);
+      } finally {
+        process.chdir(prevCwd);
+        server.close();
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "verify runChecks: 本地未分片时远程残留分片清单判失败，本地已分片时远程分片清单与本地不一致判失败",
+    async () => {
+      const prevCwd = process.cwd();
+      const workDir = mkdtempSync(join(tmpdir(), "evd-verify-stale-split-"));
+      let remoteLogicIndex: string[] | null = ["logicCode.part1.zip"];
+      let remoteFullIndex: string[] | null = null;
+
+      const server = createServer((req, res) => {
+        const urlPath = (req.url || "").split("?")[0];
+        const sendJSON = (payload: unknown) => {
+          const body = JSON.stringify(payload);
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+          });
+          res.end(body);
+        };
+        if (urlPath === "/package.json") {
+          return sendJSON({ name: "my-electron-app", version: "2.0.0" });
+        }
+        if (urlPath === "/changelog.json") {
+          return sendJSON({ version: "2.0.0" });
+        }
+        if (urlPath === "/logicCodeZipSplitZips/index.json") {
+          if (remoteLogicIndex) return sendJSON(remoteLogicIndex);
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        if (urlPath === "/fullCodeZipSplitZips/index.json") {
+          if (remoteFullIndex) return sendJSON(remoteFullIndex);
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Length": "4" });
+        res.end("data");
+      });
+
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const remoteUrl = `http://127.0.0.1:${(server.address() as any).port}`;
+      const localPKG = { name: "my-electron-app", version: "2.0.0" };
+
+      try {
+        writeFileSync(
+          join(workDir, "package.json"),
+          JSON.stringify({ name: "host-workspace", version: "1.0.0" })
+        );
+        mkdirSync(join(workDir, "node_modules", ".evd"), { recursive: true });
+        process.chdir(workDir);
+
+        const staleResults = await runChecks(remoteUrl, localPKG, 5000);
+        const staleLogicCheck = staleResults.find(
+          (r) => r.label === "logicCodeZipSplitZips/index.json"
+        );
+        assert.ok(staleLogicCheck);
+        assert.equal(staleLogicCheck!.ok, false);
+        assert.ok(
+          staleLogicCheck!.detail.includes("远程残留历史分片清单"),
+          `Unexpected detail: ${staleLogicCheck!.detail}`
+        );
+        assert.equal(
+          staleResults.find((r) => r.label === "logicCode.zip")?.ok,
+          true
+        );
+        assert.equal(
+          staleResults.find((r) => r.label === "fullCodeZipSplitZips/index.json")
+            ?.ok,
+          true
+        );
+
+        remoteLogicIndex = [];
+        const emptyIndexResults = await runChecks(remoteUrl, localPKG, 5000);
+        assert.equal(
+          emptyIndexResults.every((r) => r.ok),
+          true,
+          `Empty remote split index should be ignored like the client does: ${JSON.stringify(
+            emptyIndexResults
+          )}`
+        );
+
+        remoteLogicIndex = null;
+        const localFullSplitDir = join(
+          workDir,
+          "node_modules",
+          ".evd",
+          SPLIT_FOLDER_NAME
+        );
+        mkdirSync(localFullSplitDir, { recursive: true });
+        writeFileSync(
+          join(localFullSplitDir, "index.json"),
+          JSON.stringify(["fullCode.part1.zip"])
+        );
+        remoteFullIndex = ["fullCode.part1.zip", "fullCode.part2.zip"];
+        const mismatchResults = await runChecks(remoteUrl, localPKG, 5000);
+        const fullIndexCheck = mismatchResults.find(
+          (r) => r.label === "fullCodeZipSplitZips/index.json"
+        );
+        assert.ok(fullIndexCheck);
+        assert.equal(fullIndexCheck!.ok, false);
+        assert.equal(
+          fullIndexCheck!.detail,
+          "与本地分片清单不一致，远程 2 个分片，本地 1 个分片"
+        );
+
+        remoteFullIndex = ["fullCode.part1.zip"];
+        const okResults = await runChecks(remoteUrl, localPKG, 5000);
+        assert.equal(
+          okResults.every((r) => r.ok),
+          true,
+          `Expected all checks to pass, got: ${JSON.stringify(okResults)}`
+        );
+        assert.ok(
+          okResults.some(
+            (r) => r.label === "fullCodeZipSplitZips/fullCode.part1.zip" && r.ok
+          )
+        );
       } finally {
         process.chdir(prevCwd);
         server.close();

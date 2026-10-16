@@ -133,6 +133,8 @@ type EVDInitPropsType = {
   onError?: (err: unknown) => void;
   //  在开始安装前调用，可以在里面关闭一些数据库连接之类的
   onBeforeNewPkgInstall?: (next: () => any, version: string) => void;
+  //  强制更新模式下用户选择退出软件前调用，可在里面保存数据，必须调用 next() 才会退出
+  onBeforeForceExit?: (next: () => void) => void;
 };
 
 let globalArgs: EVDInitPropsType | null = null;
@@ -143,6 +145,7 @@ let activeTracker: UpdateProgressTracker | null = null;
 let isUpdating = false;
 let isForceUpdate = false;
 let isRelaunching = false;
+let isForceExitPending = false;
 let autoCheckIntervalId: NodeJS.Timeout | null = null;
 let autoCheckStartupTimeoutId: NodeJS.Timeout | null = null;
 
@@ -219,6 +222,13 @@ export async function EVDCheckUpdate() {
     throw new EVDError(EVDErrorCodeEnum.REMOTE_NOT_FOUND, {
       phase: EVDErrorPhaseEnum.CHECK,
       url: joinRemoteUrl(remoteUrl, "package.json"),
+    });
+  }
+  if (typeof remoteJSON.version !== "string" || !remoteJSON.version.trim()) {
+    throw new EVDError(EVDErrorCodeEnum.REMOTE_INVALID_JSON, {
+      phase: EVDErrorPhaseEnum.CHECK,
+      url: joinRemoteUrl(remoteUrl, "package.json"),
+      cause: "package.json 缺少 version 字段",
     });
   }
 
@@ -330,11 +340,38 @@ function watchHostWindowInForceMode(
   }
 }
 
+function isInstallingFiles() {
+  return isUpdating && activeTracker?.state.stage === "install";
+}
+
 function exitAppIfForceUpdateNotInstalling(): boolean {
-  if (isUpdating && activeTracker?.state.stage === "install") {
+  if (isInstallingFiles()) {
     return false;
   }
-  app.exit(0);
+  const { onBeforeForceExit } = getConfigs();
+  if (!onBeforeForceExit) {
+    app.exit(0);
+    return true;
+  }
+  if (isForceExitPending) return true;
+  isForceExitPending = true;
+
+  let isNextCalled = false;
+  const next = () => {
+    if (isNextCalled) return;
+    isNextCalled = true;
+    isForceExitPending = false;
+    if (isInstallingFiles()) return;
+    app.exit(0);
+  };
+  try {
+    const maybePromise: any = onBeforeForceExit(next);
+    if (maybePromise && typeof maybePromise.catch === "function") {
+      maybePromise.catch(() => next());
+    }
+  } catch (e) {
+    next();
+  }
   return true;
 }
 
@@ -735,181 +772,181 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
     });
   }
 
-  const splitFolder =
-    zipFile === FULL_CODE_ZIP_NAME
-      ? SPLIT_FOLDER_NAME
-      : LOGIC_SPLIT_FOLDER_NAME;
-  let splitIndexList: false | string[] = false;
-  tracker.update({
-    stage: "download",
-    stageTitle: "正在检查远程分片配置...",
-    percent: 10,
-    progressText: "探测分片索引",
-    currentItem: `${splitFolder}/index.json`,
-    stepValues: {
-      download: "探测分片中...",
-    },
-  });
   try {
-    splitIndexList = await netRequest({
-      url: joinRemoteUrl(
-        remoteUrl,
-        `${splitFolder}/index.json?hash=${Math.random()}`
-      ),
-      responseType: "json",
-      timeoutMs: requestTimeout,
-      phase: EVDErrorPhaseEnum.DOWNLOAD,
+    const splitFolder =
+      zipFile === FULL_CODE_ZIP_NAME
+        ? SPLIT_FOLDER_NAME
+        : LOGIC_SPLIT_FOLDER_NAME;
+    let splitIndexList: false | string[] = false;
+    tracker.update({
+      stage: "download",
+      stageTitle: "正在检查远程分片配置...",
+      percent: 10,
+      progressText: "探测分片索引",
+      currentItem: `${splitFolder}/index.json`,
+      stepValues: {
+        download: "探测分片中...",
+      },
     });
-  } catch (e) {}
-
-  if (Array.isArray(splitIndexList) && splitIndexList.length > 0) {
-    const totalChunks = splitIndexList.length;
-    const tmpFilePaths = splitIndexList.map((fileName) =>
-      join(appPath, fileName)
-    );
-
     try {
-      for (const [index, fileName] of splitIndexList.entries()) {
-        const chunkNum = index + 1;
+      splitIndexList = await netRequest({
+        url: joinRemoteUrl(
+          remoteUrl,
+          `${splitFolder}/index.json?hash=${Math.random()}`
+        ),
+        responseType: "json",
+        timeoutMs: requestTimeout,
+        phase: EVDErrorPhaseEnum.DOWNLOAD,
+      });
+    } catch (e) {}
+
+    if (Array.isArray(splitIndexList) && splitIndexList.length > 0) {
+      const totalChunks = splitIndexList.length;
+      const tmpFilePaths = splitIndexList.map((fileName) =>
+        join(appPath, fileName)
+      );
+
+      try {
+        for (const [index, fileName] of splitIndexList.entries()) {
+          const chunkNum = index + 1;
+          tracker.update({
+            stage: "download",
+            stageTitle: `正在下载更新包 (分片 ${chunkNum}/${totalChunks})...`,
+            percent: Math.round(10 + ((chunkNum - 1) / totalChunks) * 32),
+            completed: chunkNum - 1,
+            total: totalChunks,
+            progressText: `分片 ${chunkNum}/${totalChunks}`,
+            currentItem: `${splitFolder}/${fileName}`,
+            stepValues: {
+              download: `分片 ${chunkNum}/${totalChunks}`,
+            },
+          });
+
+          await downloadFile({
+            url: joinRemoteUrl(
+              remoteUrl,
+              `${splitFolder}/${fileName}?hash=${Math.random()}`
+            ),
+            destPath: tmpFilePaths[index],
+            stallTimeoutMs: downloadStallTimeout,
+            onProgress: ({ loadedBytes, totalBytes }) => {
+              const chunkRatio =
+                totalBytes > 0 ? Math.min(1, loadedBytes / totalBytes) : 0;
+              const overallRatio = (index + chunkRatio) / totalChunks;
+              const sizeText =
+                totalBytes > 0
+                  ? `${formatMB(loadedBytes)} / ${formatMB(totalBytes)}`
+                  : formatMB(loadedBytes);
+              const label = `分片 ${chunkNum}/${totalChunks} (${sizeText})`;
+              tracker.update(
+                {
+                  stage: "download",
+                  stageTitle: `正在下载更新包 (分片 ${chunkNum}/${totalChunks})...`,
+                  percent: Math.round(10 + overallRatio * 32),
+                  completed: loadedBytes,
+                  total: totalBytes || undefined,
+                  progressText: label,
+                  currentItem: `${splitFolder}/${fileName}`,
+                  stepValues: {
+                    download: label,
+                  },
+                },
+                false
+              );
+            },
+          });
+        }
+
         tracker.update({
           stage: "download",
-          stageTitle: `正在下载更新包 (分片 ${chunkNum}/${totalChunks})...`,
-          percent: Math.round(10 + ((chunkNum - 1) / totalChunks) * 32),
-          completed: chunkNum - 1,
-          total: totalChunks,
-          progressText: `分片 ${chunkNum}/${totalChunks}`,
-          currentItem: `${splitFolder}/${fileName}`,
+          stageTitle: "正在合并更新包分片...",
+          percent: 44,
+          progressText: `合并 ${totalChunks} 个分片`,
+          currentItem: zipPath,
           stepValues: {
-            download: `分片 ${chunkNum}/${totalChunks}`,
+            download: `正在合并 ${totalChunks} 个分片...`,
           },
         });
 
-        await downloadFile({
-          url: joinRemoteUrl(
-            remoteUrl,
-            `${splitFolder}/${fileName}?hash=${Math.random()}`
-          ),
-          destPath: tmpFilePaths[index],
-          stallTimeoutMs: downloadStallTimeout,
-          onProgress: ({ loadedBytes, totalBytes }) => {
-            const chunkRatio =
-              totalBytes > 0 ? Math.min(1, loadedBytes / totalBytes) : 0;
-            const overallRatio = (index + chunkRatio) / totalChunks;
-            const sizeText =
-              totalBytes > 0
-                ? `${formatMB(loadedBytes)} / ${formatMB(totalBytes)}`
-                : formatMB(loadedBytes);
-            const label = `分片 ${chunkNum}/${totalChunks} (${sizeText})`;
-            tracker.update(
-              {
-                stage: "download",
-                stageTitle: `正在下载更新包 (分片 ${chunkNum}/${totalChunks})...`,
-                percent: Math.round(10 + overallRatio * 32),
-                completed: loadedBytes,
-                total: totalBytes || undefined,
-                progressText: label,
-                currentItem: `${splitFolder}/${fileName}`,
-                stepValues: {
-                  download: label,
-                },
-              },
-              false
-            );
+        //  分片全部下载完成后再合并，避免中途失败留下半个包
+        await new Promise<void>((res, rej) => {
+          const mergedStream = createWriteStream(zipPath);
+          mergedStream.on("error", rej);
+          for (const tmpFilePath of tmpFilePaths) {
+            mergedStream.write(readFileSync(tmpFilePath));
+          }
+          mergedStream.end(() => res());
+        });
+
+        tracker.update({
+          stage: "download",
+          stageTitle: "更新包下载完成",
+          percent: 45,
+          progressText: `✓ 已完成 (${totalChunks} 个分片)`,
+          currentItem: zipFile,
+          stepValues: {
+            download: `✓ 已完成 (${totalChunks} 个分片)`,
           },
         });
+      } finally {
+        //  删除临时文件
+        tmpFilePaths.filter(existsSync).forEach(forceDeleteSync);
       }
-
+    } else {
+      const pkgTypeLabel = zipFile === FULL_CODE_ZIP_NAME ? "全量包" : "增量包";
+      let finalDownloadSizeText = pkgTypeLabel;
       tracker.update({
         stage: "download",
-        stageTitle: "正在合并更新包分片...",
-        percent: 44,
-        progressText: `合并 ${totalChunks} 个分片`,
-        currentItem: zipPath,
+        stageTitle: `正在下载更新包 (${pkgTypeLabel})...`,
+        percent: 10,
+        progressText: `连接下载 ${zipFile}`,
+        currentItem: zipFile,
         stepValues: {
-          download: `正在合并 ${totalChunks} 个分片...`,
+          download: "下载中...",
         },
       });
 
-      //  分片全部下载完成后再合并，避免中途失败留下半个包
-      await new Promise<void>((res, rej) => {
-        const mergedStream = createWriteStream(zipPath);
-        mergedStream.on("error", rej);
-        for (const tmpFilePath of tmpFilePaths) {
-          mergedStream.write(readFileSync(tmpFilePath));
-        }
-        mergedStream.end(() => res());
+      await downloadFile({
+        url: joinRemoteUrl(remoteUrl, `${zipFile}?hash=${Math.random()}`),
+        destPath: zipPath,
+        stallTimeoutMs: downloadStallTimeout,
+        onProgress: ({ loadedBytes, totalBytes }) => {
+          const ratio =
+            totalBytes > 0 ? Math.min(1, loadedBytes / totalBytes) : 0.5;
+          finalDownloadSizeText =
+            totalBytes > 0
+              ? `${formatMB(loadedBytes)} / ${formatMB(totalBytes)}`
+              : formatMB(loadedBytes);
+          tracker.update(
+            {
+              stage: "download",
+              stageTitle: `正在下载更新包 (${pkgTypeLabel})...`,
+              percent: Math.round(10 + ratio * 35),
+              completed: loadedBytes,
+              total: totalBytes || undefined,
+              progressText: finalDownloadSizeText,
+              currentItem: zipFile,
+              stepValues: {
+                download: finalDownloadSizeText,
+              },
+            },
+            false
+          );
+        },
       });
 
       tracker.update({
         stage: "download",
         stageTitle: "更新包下载完成",
         percent: 45,
-        progressText: `✓ 已完成 (${totalChunks} 个分片)`,
+        progressText: `✓ ${finalDownloadSizeText}`,
         currentItem: zipFile,
         stepValues: {
-          download: `✓ 已完成 (${totalChunks} 个分片)`,
+          download: `✓ ${finalDownloadSizeText}`,
         },
       });
-    } finally {
-      //  删除临时文件
-      tmpFilePaths.filter(existsSync).forEach(forceDeleteSync);
     }
-  } else {
-    const pkgTypeLabel = zipFile === FULL_CODE_ZIP_NAME ? "全量包" : "增量包";
-    let finalDownloadSizeText = pkgTypeLabel;
-    tracker.update({
-      stage: "download",
-      stageTitle: `正在下载更新包 (${pkgTypeLabel})...`,
-      percent: 10,
-      progressText: `连接下载 ${zipFile}`,
-      currentItem: zipFile,
-      stepValues: {
-        download: "下载中...",
-      },
-    });
 
-    await downloadFile({
-      url: joinRemoteUrl(remoteUrl, `${zipFile}?hash=${Math.random()}`),
-      destPath: zipPath,
-      stallTimeoutMs: downloadStallTimeout,
-      onProgress: ({ loadedBytes, totalBytes }) => {
-        const ratio =
-          totalBytes > 0 ? Math.min(1, loadedBytes / totalBytes) : 0.5;
-        finalDownloadSizeText =
-          totalBytes > 0
-            ? `${formatMB(loadedBytes)} / ${formatMB(totalBytes)}`
-            : formatMB(loadedBytes);
-        tracker.update(
-          {
-            stage: "download",
-            stageTitle: `正在下载更新包 (${pkgTypeLabel})...`,
-            percent: Math.round(10 + ratio * 35),
-            completed: loadedBytes,
-            total: totalBytes || undefined,
-            progressText: finalDownloadSizeText,
-            currentItem: zipFile,
-            stepValues: {
-              download: finalDownloadSizeText,
-            },
-          },
-          false
-        );
-      },
-    });
-
-    tracker.update({
-      stage: "download",
-      stageTitle: "更新包下载完成",
-      percent: 45,
-      progressText: `✓ ${finalDownloadSizeText}`,
-      currentItem: zipFile,
-      stepValues: {
-        download: `✓ ${finalDownloadSizeText}`,
-      },
-    });
-  }
-
-  try {
     //  解压
     let extractedCount = 0;
     let totalZipEntries = 0;
@@ -1450,6 +1487,7 @@ function getConfigs(): Required<EVDInitPropsType> {
       onBeforeNewPkgInstall: (next, version: string) => {
         next();
       },
+      onBeforeForceExit: undefined,
       windowHeight: 360,
       windowWidth: 400,
       logo: undefined,

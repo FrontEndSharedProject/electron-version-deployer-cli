@@ -119,6 +119,8 @@ type EVDInitPropsType = {
   //  当自动更新出现错误时的回掉，回调参数为 EVDError
   onError?: (err: unknown) => void;
   onBeforeNewPkgInstall?: (next: () => any) => void;
+  //  强制更新模式下用户选择退出软件前调用，可在里面保存数据，必须调用 next() 才会退出
+  onBeforeForceExit?: (next: () => void) => void;
 };
 ```
 
@@ -177,7 +179,7 @@ EVDInit({
 | `SSL_ERROR` | 证书校验失败，自建服务器用自签名证书时常见 |
 | `HTTP_ERROR` | 非 2xx 响应 |
 | `REMOTE_NOT_FOUND` | 404，远程未部署过或地址填错 |
-| `REMOTE_INVALID_JSON` | 有响应但不是合法 JSON，静态服务器返回兜底页时常见 |
+| `REMOTE_INVALID_JSON` | 有响应但不是合法 JSON（静态服务器返回兜底页时常见），或远程 `package.json` 缺少 `version` 字段 |
 | `DOWNLOAD_TIMEOUT` | 下载过程中长时间没有新数据 |
 | `DOWNLOAD_FAILED` | 下载中断 |
 | `UNZIP_FAILED` | 更新包解压失败 |
@@ -232,8 +234,18 @@ EVDCheckUpdate()
 - **弹窗文案与按钮**：强制更新模式下，更新弹窗的窗口标题与顶部提示变为「版本过低，必须安装新版本」，初始界面与错误面板的关闭类按钮变为「退出软件」（错误面板的「重试」与「复制错误信息」按钮保持不变）。
 - **主窗口隐藏与防唤醒阻断**：进入强制更新模式时，更新弹窗会设为任务栏可见（`setSkipTaskbar(false)`），宿主应用中除更新弹窗外的全部窗口会被自动隐藏（`win.hide()`，非 macOS 平台同时调用 `win.setEnabled(false)` 禁用交互）。在强制更新期间，主进程持续监听现有窗口的 `show` 事件、`browser-window-created` 与 `browser-window-focus`，任何非弹窗窗口被重新显示（含 `show()` / `showInactive()`）、聚焦或新建时，均会被立即隐藏并将焦点切回更新弹窗。强制更新模式在同一会话内不可逆，仅以退出或更新后重启结束。
 - **在线弹窗原位升级**：若已打开普通更新弹窗，后续版本检查判定为强制更新模式时，现有弹窗会原位升级为强制更新模式（同步更新窗口标题、顶部提示、按钮文案与任务栏可见性，并立即隐藏和阻断宿主其它窗口），且同一会话内即使远程改回普通更新也保持强制更新模式。
-- **关闭即退出生命周期**：强制更新模式下，除 `install` 阶段（安装子进程正在覆盖本地文件）会拦截窗口关闭以防破坏安装目录、以及更新完成后的重启流程放行关闭并调用 `app.relaunch()` 外，其余任何阶段（初始界面、`precheck` 环境检查与等待 `onBeforeNewPkgInstall`、`download` 下载、`unzip` 解压、错误面板）点击「退出软件」、点击系统关闭按钮，或宿主其它窗口全部关闭只剩更新弹窗时，主进程均直接调用 `app.exit(0)` 退出应用。
-- **`app.exit(0)` 注意事项**：`app.exit(0)` 会直接终止进程，**跳过宿主应用的 `before-quit` / `will-quit` 收尾钩子**。需要在更新写入前释放的资源（如数据库连接、文件锁）请放在 `onBeforeNewPkgInstall` 中处理。
+- **关闭即退出生命周期**：强制更新模式下，除 `install` 阶段（安装子进程正在覆盖本地文件）会拦截窗口关闭以防破坏安装目录、以及更新完成后的重启流程放行关闭并调用 `app.relaunch()` 外，其余任何阶段（初始界面、`precheck` 环境检查与等待 `onBeforeNewPkgInstall`、`download` 下载、`unzip` 解压、错误面板）点击「退出软件」、点击系统关闭按钮，或宿主其它窗口全部关闭只剩更新弹窗时，主进程均调用 `app.exit(0)` 退出应用（提供了 `onBeforeForceExit` 时先回调，见下一条）。
+- **`app.exit(0)` 注意事项**：`app.exit(0)` 会直接终止进程，**跳过宿主应用的 `before-quit` / `will-quit` 收尾钩子**。需要在更新写入前释放的资源（如数据库连接、文件锁）请放在 `onBeforeNewPkgInstall` 中处理。定时轮询可能在用户使用中途进入强制更新并立即隐藏主窗口，需要在退出前保存数据（如未保存的编辑内容）时提供 `onBeforeForceExit`：上述退出操作会先调用它，**调用 `next()` 后才会 `app.exit(0)`**；等待期间重复的退出操作会被忽略，回调抛错或返回的 Promise reject 时直接退出。
+
+  ```typescript
+  EVDInit({
+    remoteUrl: import.meta.env.REMOTE_URL,
+    async onBeforeForceExit(next) {
+      await saveDrafts();
+      next();
+    },
+  });
+  ```
 - **模板协议版本回退**：弹窗模板带有 `<meta name="evd-template-version" content="1" />` 协议版本标记。当本地依赖目录 `node_modules/electron-version-deployer-cli/dist/templates/newVersionDialog.html` 缺失该标记或版本与主进程内置版本不匹配时，主进程自动回退到编译内嵌模板；版本一致时沿用本地模板。主进程作为强制模式的唯一权威，即便收到旧模板发出的 `evd-skip` 也会执行退出。
 - **旧客户端兼容性**：不支持 `minSupportedVersion` 的旧版客户端会忽略该字段并按普通更新处理，强制更新仅对已包含该特性的客户端版本生效。
 
@@ -398,7 +410,7 @@ $ evd preDeploy
 $ evd verify
 ```
 
-上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` / `minSupportedVersion` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`（或 `logicCodeZipSplitZips` 全部分片）、`fullCode.zip`（或 `fullCodeZipSplitZips` 全部分片）均可访问。任一项不通过即 `exit 1`。
+上传完成后执行，校验远程链接真的生效：远程 `package.json` 的 `name` / `version` / `minSupportedVersion` 与本地一致、`changelog.json`、`changelogs.html`、`logicCode.zip`（或 `logicCodeZipSplitZips` 全部分片）、`fullCode.zip`（或 `fullCodeZipSplitZips` 全部分片）均可访问。本地已分片时，远程分片清单 `index.json` 必须与本地一致；本地未分片时，远程若残留历史分片清单也会判失败——客户端会优先下载分片，残留清单会让它装回旧版本代码。任一项不通过即 `exit 1`。
 
 请求全部带 cache-buster，可用 `--retry <n>`、`--retry-delay <s>` 应对 CDN 传播延迟。`--retry` 是**总尝试次数（含首次）**，默认 3 表示最多校验 3 次；`--retry-delay` 是两次尝试之间的间隔秒数，默认 5。
 
@@ -422,7 +434,7 @@ deploy:
 
 自建服务器没有这个限制，`selfHosted` 与 `netlify` 默认**不拆分**。需要时用 `configs.zipSplit` 或 `--split` 打开，也可通过 `--no-split` 关闭。
 
-> 关掉拆分或包体积未达到分片阈值时，`.evd` 里遗留的 `fullCodeZipSplitZips` / `logicCodeZipSplitZips` 目录会被自动清理——否则旧的 `index.json` 被传上去后，客户端会误去下载并不存在的分片。
+> 关掉拆分或包体积未达到分片阈值时，`.evd` 里遗留的 `fullCodeZipSplitZips` / `logicCodeZipSplitZips` 目录会被自动清理——否则旧的 `index.json` 被传上去后，客户端会误去下载并不存在的分片。远程服务器上的历史分片目录需要在上传时一并删除（如 `rsync --delete`），否则 `evd verify` 会报「远程残留历史分片清单」。
 
 ### 手动检查版本更新
 
@@ -440,6 +452,26 @@ EVDCheckUpdate().then((isHaveNewVersion: boolean) => {
   }
 });
 ```
+
+## 下一版本升级须知（未发布）
+
+### ⚠️ 破坏性变更：`extraFolders` 改为随更新包下发到客户端
+
+| | 以前 | 现在 |
+| --- | --- | --- |
+| 打包方式 | `evd deploy` / `evd preDeploy` 把目录原样复制进 `node_modules/.evd/<basename>` | `evd prepare` 把目录打进 `fullCode.zip` 与 `logicCode.zip` 根层级的 `<basename>/` |
+| 远程服务器 | 可通过 `<remoteUrl>/<basename>/...` 访问 | 不再部署这些目录 |
+| 客户端 | 不下载 | 热更新后递归覆盖写入 `app.getAppPath()/<basename>`（同名覆盖、新增写入、不删除本地旧文件） |
+
+影响：
+
+- 如果你用 `extraFolders` 在更新服务器上托管静态文件（下载页、图片、运行时从 `<remoteUrl>/<basename>/` 拉取的资源等），升级后**下一次部署这些地址就会 404**：Cloudflare / Netlify 每次部署都是整站快照，自建服务器用 `rsync --delete` 上传时同理。
+- 这些目录会写入每台客户端的应用目录，并计入增量包体积，可能因此触发分片。
+
+迁移：
+
+1. 只需要服务器托管、不需要进客户端的目录，从 `extraFolders` 中移出，改由独立的站点或 CI 步骤上传；同时手动删除旧版本留在 `node_modules/.evd/<basename>` 的副本（`evd prepare` 只清理仍在 `extraFolders` 中的同名目录），否则过期内容会继续被上传。
+2. 确实要随热更新下发到客户端的目录，留在 `extraFolders` 中即可，目录名不能与 `sources.codes`、`sources.nodeModules`、`package.json`、`evdUnzip` 重名。
 
 ## 0.5.0 版本说明与升级指南
 
@@ -471,7 +503,7 @@ selfHosted: {
 deploy:
   script:
     - npx evd prepare
-    - npx evd preDeploy            # 检测 + extraFolders + 打包整形
+    - npx evd preDeploy            # 检测 + 打包整形
     - rsync -av --delete node_modules/.evd/ "$DEPLOY_TARGET"
     - npx evd verify               # 确认远程真的生效
 ```
@@ -548,7 +580,7 @@ $ npm install electron-version-deployer-cli@0.5.0
 
 在 `evd.config.js` 里加 `selfHosted`，CI 脚本改成 `prepare` → `preDeploy` → 上传 → `verify`。
 
-> ⚠️ 注意：如果你以前是"只跑 `evd prepare` 然后手动上传"，并且配置了 `extraFolders`，那么**这些文件夹此前一直没有被上传**（`extraFolders` 的复制只在 `evd deploy` 里执行）。0.5.0 把它移进了共享检测流程，`preDeploy` 也会执行。换句话说，改用 `preDeploy` 之后你的更新包里会多出这些文件夹——这是修复，不是回归。
+> ⚠️ 注意：如果你以前是"只跑 `evd prepare` 然后手动上传"，并且配置了 `extraFolders`，那么**这些文件夹此前一直没有被上传**（`extraFolders` 的复制只在 `evd deploy` 里执行）。0.5.0 把它移进了共享检测流程，`preDeploy` 也会执行。换句话说，改用 `preDeploy` 之后你的更新包里会多出这些文件夹——这是修复，不是回归。下一版本起 `extraFolders` 改为打进更新包下发到客户端，见[下一版本升级须知](#下一版本升级须知未发布)。
 
 **4. 自建服务器想关掉压缩包拆分（可选）**
 
