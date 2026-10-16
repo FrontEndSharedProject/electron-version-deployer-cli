@@ -1,10 +1,50 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] - 2026-10-16
 
 ### ⚠️ 破坏性变更
 
-- `extraFolders` 不再由 `evd deploy` / `evd preDeploy` 原样复制进 `node_modules/.evd/<basename>` 部署到远程服务器，改为由 `evd prepare` 打进 `fullCode.zip` 与 `logicCode.zip` 根层级的 `<basename>/`，客户端热更新后写入 `app.getAppPath()/<basename>`。依赖 `<remoteUrl>/<basename>/...` 托管静态文件的项目，升级后下一次部署这些地址会 404，迁移方式见 README「下一版本升级须知」。
+- `extraFolders` 不再由 `evd deploy` / `evd preDeploy` 原样复制进 `node_modules/.evd/<basename>` 部署到远程服务器，改为由 `evd prepare` 打进 `fullCode.zip` 与 `logicCode.zip` 根层级的 `<basename>/`，客户端热更新后写入 `app.getAppPath()/<basename>`。依赖 `<remoteUrl>/<basename>/...` 托管静态文件的项目，升级后下一次部署这些地址会 404，迁移方式见 README「0.6.0 版本说明与升级指南」。
+
+### 新增
+
+#### 客户端：强制更新
+
+- 远程 `package.json` 声明了合法的 `minSupportedVersion`（`x.y.z`）且本地版本低于它时进入强制更新：弹窗标题与提示变为「版本过低，必须安装新版本」，关闭类按钮变为「退出软件」；宿主其它窗口被隐藏，重新显示、聚焦或新建时会再次被隐藏；关闭弹窗即退出应用，覆盖安装本地文件期间拦截关闭。已打开的普通更新弹窗在后续检测命中强制更新时原位升级。
+- `EVDInit` 新增 `onBeforeForceExit(next)`：强制更新模式下用户选择退出前调用，调用 `next()` 后才退出，可用于保存未落盘的数据；回调抛错或 reject 时直接退出。
+
+#### 客户端：更新进度与诊断
+
+- 更新弹窗展示「环境检查 → 下载 → 解压 → 更新本地文件 → 重启」五个阶段的进度、百分比、当前处理文件与已用时间；超过 10 秒无进展时提示可能原因，并提供「复制当前诊断信息」。
+- 更新前检查运行环境，新增错误码 `APP_TRANSLOCATION`（macOS 随机只读沙盒）、`READ_ONLY_VOLUME`（只读卷或 DMG）、`DISK_FULL`；`EVDError` 新增 `stage` / `progress` / `filePath` 字段，错误面板同步展示。
+- 弹窗模板带协议版本标记 `evd-template-version`，`node_modules` 中的模板缺失标记或版本不匹配时自动改用内嵌模板；应用目录只读时模板写入系统临时目录，保证错误面板仍能显示。
+
+#### CLI：最低支持版本
+
+- `evd.config.js` 新增 `minSupportedVersion`；`evd deploy` / `evd preDeploy` 新增 `--min-supported-version <version>`、`--force-update`、`--no-force-update`（三者互斥）。本次生效值低于远程现值（含取消）且不是来自 CLI 参数时，需要交互确认或 `--allow-min-version-downgrade`。
+- `evd verify` 校验远程 `minSupportedVersion` 与本地一致。
+
+#### 增量包分片与远程校验
+
+- `zipSplit` 同时作用于 `logicCode.zip`（`logicCodeZipSplitZips/`），两个包按各自体积独立判断是否达到 `thresholdMB`；客户端下载增量包时自动探测并合并分片。`--split` 与 `--no-split` 同时传入会报错。
+- `evd prepare` 会清理 `.evd` 中残留的历史分片目录。
+- `evd verify`：本地已分片时校验远程分片清单与本地一致；本地未分片时，远程残留的历史分片清单会判失败（客户端会优先下载这些旧分片）。
+
+#### extraFolders
+
+- 支持静态数组、同步函数与异步函数，兼容相对项目根目录的路径与绝对路径，在编译完成后解析；目录名与 `sources.codes`、`sources.nodeModules`、`package.json`、`evdUnzip` 冲突或彼此重名时报错。
+
+### 修复
+
+- 多次调用 `EVDCheckUpdate()` 或定时检测再次命中新版本时会叠加打开多个更新弹窗，现在复用同一个弹窗；重复调用 `EVDInit` 不再叠加定时检测任务。
+- 覆盖安装超过 5 分钟未完成会被当作成功并重启应用，安装子进程异常退出也会被当作成功，现在都报 `INSTALL_FAILED`。
+- 更新完成、下载失败或安装失败后，应用目录下残留的 `evdUnzip.zip`、`evdUnzip/`、`_evdInstallerTmp.js` 现在会被清理。
+- 版本号某一段达到 5 位数字时版本比较出错。
+- 远程 `package.json` 缺少 `version` 时抛出 `TypeError`，现在报 `REMOTE_INVALID_JSON`。
+- changelog 取不到时点击「所有版本更新记录」会在弹窗内跳转，链接内含加粗等子元素时点击无效，现在统一用系统浏览器打开。
+- wrangler / netlify 部署失败（含命令不存在）或 `evd.config.js` 加载出错时，CLI 以未捕获异常崩溃，现在输出错误并 `exit 1`。
+- `evd install-prebuilt` 不等待下载完成，下载失败时以未捕获异常退出，现在等待全部下载并在失败时 `exit 1`。
+- `evd init` 在 `package.json` 没有 `name` 字段时报错。
 
 ## [0.5.2] - 2026-09-22
 

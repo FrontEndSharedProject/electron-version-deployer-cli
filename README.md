@@ -2,8 +2,8 @@
 
 electron 版本版本更新命令行
 
-> **0.5.0 已发布** — 新增自建服务器部署（`evd preDeploy` / `evd verify`）与更新错误类型化（`EVDError`）。
-> 升级前请看 [0.5.0 版本说明与升级指南](#050-版本说明与升级指南)。**无破坏性变更，直接升级即可。**
+> **0.6.0 已发布** — 新增强制更新（`minSupportedVersion`）、更新进度弹窗与增量包分片。
+> 升级前请看 [0.6.0 版本说明与升级指南](#060-版本说明与升级指南)。**包含一项破坏性变更：`extraFolders` 改为随更新包下发到客户端。**
 
 # 目的
 
@@ -453,7 +453,26 @@ EVDCheckUpdate().then((isHaveNewVersion: boolean) => {
 });
 ```
 
-## 下一版本升级须知（未发布）
+## 0.6.0 版本说明与升级指南
+
+### 一句话总结
+
+新增强制更新、更新进度弹窗与增量包分片；**`extraFolders` 的语义有破坏性变更**，用到它的项目请先看下面的迁移说明，其余配置与调用方式不用改。
+
+```shell
+$ npm install electron-version-deployer-cli@0.6.0
+```
+
+### 新功能
+
+- **强制更新**：配置 `minSupportedVersion`（或部署时传 `--force-update` / `--min-supported-version`），本地版本低于它的客户端必须完成更新才能继续使用，详见[强制更新与最低支持版本](#强制更新与最低支持版本minsupportedversion)与[强制更新（Force Update）与客户端行为](#强制更新force-update与客户端行为)。需要在用户退出前保存数据时提供 `onBeforeForceExit`。
+- **更新进度弹窗**：展示「环境检查 → 下载 → 解压 → 更新本地文件 → 重启」五个阶段的进度、当前处理文件与已用时间，长时间无进展时提示可能原因，并可一键复制诊断信息；更新前会检查 macOS App Translocation、只读卷与安装目录写权限。
+- **增量包分片**：`zipSplit` 同时作用于 `logicCode.zip`，详见[关于压缩包拆分](#关于压缩包拆分)；`evd verify` 会校验远程分片清单与本地一致，并拦截远程残留的历史分片清单。
+- **`extraFolders` 随热更新下发**：见下方破坏性变更。
+
+### 存量客户端如何过渡
+
+0.5.x 客户端不认识增量包分片目录 `logicCodeZipSplitZips`，但支持全量包分片。`^0.5.x` 不包含 0.6.0，升级时 `dependencies` 里的版本范围必然变化，存量客户端会下载全量包完成这次更新，之后就运行 0.6.0 客户端。前提是 `electron-version-deployer-cli` 按[安装](#安装)要求放在 `dependencies` 中。
 
 ### ⚠️ 破坏性变更：`extraFolders` 改为随更新包下发到客户端
 
@@ -580,7 +599,7 @@ $ npm install electron-version-deployer-cli@0.5.0
 
 在 `evd.config.js` 里加 `selfHosted`，CI 脚本改成 `prepare` → `preDeploy` → 上传 → `verify`。
 
-> ⚠️ 注意：如果你以前是"只跑 `evd prepare` 然后手动上传"，并且配置了 `extraFolders`，那么**这些文件夹此前一直没有被上传**（`extraFolders` 的复制只在 `evd deploy` 里执行）。0.5.0 把它移进了共享检测流程，`preDeploy` 也会执行。换句话说，改用 `preDeploy` 之后你的更新包里会多出这些文件夹——这是修复，不是回归。下一版本起 `extraFolders` 改为打进更新包下发到客户端，见[下一版本升级须知](#下一版本升级须知未发布)。
+> ⚠️ 注意：如果你以前是"只跑 `evd prepare` 然后手动上传"，并且配置了 `extraFolders`，那么**这些文件夹此前一直没有被上传**（`extraFolders` 的复制只在 `evd deploy` 里执行）。0.5.0 把它移进了共享检测流程，`preDeploy` 也会执行。换句话说，改用 `preDeploy` 之后你的更新包里会多出这些文件夹——这是修复，不是回归。0.6.0 起 `extraFolders` 改为打进更新包下发到客户端，见[0.6.0 版本说明与升级指南](#060-版本说明与升级指南)。
 
 **4. 自建服务器想关掉压缩包拆分（可选）**
 
