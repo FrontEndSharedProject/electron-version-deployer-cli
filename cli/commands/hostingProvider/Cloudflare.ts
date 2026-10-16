@@ -25,7 +25,7 @@ export class Cloudflare implements ProviderInterface {
   deploy(props: { folder: string; configs: EVDConfigType }): Promise<void> {
     const cloudflareConfig = props.configs.cloudflare;
     if (!cloudflareConfig) throw new Error("cloudflare 配置为空");
-    return new Promise<void>((res) => {
+    return new Promise<void>((res, rej) => {
       const cmd = platform() === "win32" ? "wrangler.cmd" : "wrangler";
       // prettier-ignore
       const output = spawn(cmd, [
@@ -44,13 +44,14 @@ export class Cloudflare implements ProviderInterface {
         }
       });
 
+      output.on("error", rej);
       output.on("exit", function (code) {
         if (code === 0) {
           console.log(logSymbols.success, "部署完成！");
           res();
           return;
         }
-        throw new Error("部署失败！");
+        rej(new Error("部署失败！"));
       });
     });
   }

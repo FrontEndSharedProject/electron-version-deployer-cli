@@ -33,6 +33,23 @@ export type ZipSplitOptions = {
   chunkSizeMB: number;
 };
 
+export function extractZipSplitCLIOverride(
+  options: Record<string, any>,
+  rawArgs?: string[]
+): boolean | undefined {
+  if (!rawArgs) {
+    return typeof options.split === "boolean" ? options.split : undefined;
+  }
+  const hasRawSplit = rawArgs.includes("--split");
+  const hasRawNoSplit = rawArgs.includes("--no-split");
+  if (hasRawSplit && hasRawNoSplit) {
+    throw new Error("--split 与 --no-split 互斥，不能同时使用");
+  }
+  if (hasRawSplit) return true;
+  if (hasRawNoSplit) return false;
+  return undefined;
+}
+
 export function resolveZipSplitOptions(
   configs: EVDConfigType,
   provider: ProviderInterface,

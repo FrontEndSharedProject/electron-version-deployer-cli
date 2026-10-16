@@ -11,7 +11,11 @@ import {
   runDeployChecks,
   EVD_FOLDER,
 } from "../helpers/deployChecks";
-import { applyZipSplit, resolveZipSplitOptions } from "../helpers/zipSplit";
+import {
+  applyZipSplit,
+  extractZipSplitCLIOverride,
+  resolveZipSplitOptions,
+} from "../helpers/zipSplit";
 
 program
   .command("preDeploy")
@@ -41,6 +45,8 @@ program
       console.log(logSymbols.info, `使用 provider: ${provider.name}`);
 
       const force = !!options.force;
+      const rawArgs =
+        command?.parent?.rawArgs ?? command?.rawArgs ?? process.argv;
       await runDeployChecks(
         configs,
         provider,
@@ -54,16 +60,13 @@ program
             force || !!options.allowMinVersionDowngrade,
           timeoutMs: Number(options.timeout),
         }),
-        extractMinVersionCLIOptions(
-          options,
-          command?.parent?.rawArgs ?? process.argv
-        )
+        extractMinVersionCLIOptions(options, rawArgs)
       );
 
       const zipSplitOptions = resolveZipSplitOptions(
         configs,
         provider,
-        options.split
+        extractZipSplitCLIOverride(options, rawArgs)
       );
       applyZipSplit(r(EVD_FOLDER), zipSplitOptions);
 

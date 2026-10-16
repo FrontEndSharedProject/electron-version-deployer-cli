@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,8 @@ import {
   toEVDError,
 } from "@/helpers/toEVDError";
 import { compareObjectsIsEqual } from "@/utils/compareObjectsIsEqual";
+import { versionToNum } from "@/utils/versionToNum";
+import { forceDeleteSync } from "@/utils/utils";
 import { createServer } from "node:http";
 import { program } from "commander";
 import extract from "extract-zip";
@@ -37,6 +40,7 @@ import { copySourceAndZipFiles } from "../cli/commands/prepare";
 import { runChecks } from "../cli/commands/verify";
 import {
   applyZipSplit,
+  extractZipSplitCLIOverride,
   FULL_CODE_ZIP_NAME,
   LOGIC_CODE_ZIP_NAME,
   LOGIC_SPLIT_FOLDER_NAME,
@@ -1802,6 +1806,73 @@ async function main() {
         process.chdir(prevCwd);
         server.close();
         rmSync(workDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  await runTest(
+    "versionToNum & extractZipSplitCLIOverride & forceDeleteSync: 5+ 位版本段比较、--split/--no-split 互斥与状态隔离、软链安全删除",
+    () => {
+      assert.equal(
+        versionToNum("1.0.10000").includes("undefined"),
+        false,
+        "5+ digit version segments must not contain undefined"
+      );
+      assert.equal(
+        versionToNum("1.0.10000") > versionToNum("1.0.9999"),
+        true
+      );
+      assert.equal(
+        versionToNum("1.0.100000") > versionToNum("1.0.20000"),
+        true
+      );
+
+      assert.equal(
+        extractZipSplitCLIOverride({ split: true }, ["node", "evd", "preDeploy"]),
+        undefined,
+        "Stale Commander options.split should be ignored when rawArgs has neither --split nor --no-split"
+      );
+      assert.equal(
+        extractZipSplitCLIOverride({}, ["node", "evd", "preDeploy", "--split"]),
+        true
+      );
+      assert.equal(
+        extractZipSplitCLIOverride({}, [
+          "node",
+          "evd",
+          "preDeploy",
+          "--no-split",
+        ]),
+        false
+      );
+      assert.throws(() =>
+        extractZipSplitCLIOverride({}, [
+          "node",
+          "evd",
+          "preDeploy",
+          "--split",
+          "--no-split",
+        ])
+      );
+
+      const tempDir = mkdtempSync(join(tmpdir(), "evd-symlink-del-"));
+      try {
+        const realDir = join(tempDir, "real-dir");
+        mkdirSync(realDir, { recursive: true });
+        const keptFile = join(realDir, "keep.txt");
+        writeFileSync(keptFile, "keep");
+
+        const linkToDir = join(tempDir, "link-to-dir");
+        symlinkSync(realDir, linkToDir, "dir");
+        forceDeleteSync(linkToDir);
+        assert.equal(existsSync(linkToDir), false);
+        assert.equal(
+          existsSync(keptFile),
+          true,
+          "forceDeleteSync on a directory symlink must not delete files inside the target directory"
+        );
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
       }
     }
   );

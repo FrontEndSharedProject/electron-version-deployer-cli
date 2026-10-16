@@ -1,6 +1,6 @@
 import { program } from "commander";
 import { sync as PkgUpSync } from "pkg-up";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import logSymbols from "log-symbols";
 import { EVDConfigType } from "@/types/EVDConfigType";
 import { join, resolve } from "node:path";
@@ -11,7 +11,7 @@ program
   .command("init")
   .description("生成配置文件")
   .action(async (source, destination) => {
-    const pkgPath = PkgUpSync();
+    const pkgPath = PkgUpSync({ cwd: process.cwd() });
     if (!pkgPath)
       return console.log(
         logSymbols.error,
@@ -21,7 +21,10 @@ program
     const pkgContent = JSON.parse(readFileSync(pkgPath, "utf-8")) as any;
 
     //  定义默认配置
-    const name = pkgContent.name.split("/").pop().replaceAll("-", "");
+    const name = (pkgContent.name || "App")
+      .split("/")
+      .pop()
+      .replaceAll("-", "");
     const defaultConfig: EVDConfigType = {
       compileCommand: "compile:mac",
       changelogsPath: "CHANGELOG.md",
@@ -44,10 +47,15 @@ program
       prebuiltConfig: {},
     };
 
-    let evdConfigContent = readFileSync(
-      join(resolve(__dirname), "templates", "evd.config.ts"),
-      "utf-8"
+    const distTemplatePath = join(
+      resolve(__dirname),
+      "templates",
+      "evd.config.ts"
     );
+    const templatePath = existsSync(distTemplatePath)
+      ? distTemplatePath
+      : resolve(__dirname, "../../public/templates/evd.config.ts");
+    let evdConfigContent = readFileSync(templatePath, "utf-8");
 
     //  配置文件内容处理
     evdConfigContent = evdConfigContent.replace(/\/\/\s+@ts-nocheck\n/, "");

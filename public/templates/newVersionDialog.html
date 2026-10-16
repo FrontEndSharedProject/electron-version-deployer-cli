@@ -530,6 +530,10 @@
         const aTag = document.querySelector(".see-all-changes");
         if (link) {
           aTag.href = link;
+          aTag.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ipcRenderer.send("evd-open-link", aTag.href);
+          });
         } else {
           aTag.remove();
         }
@@ -542,16 +546,16 @@
         const contentRef = document.querySelector(".content");
 
         contentRef.innerHTML = `
-        <p class="title">${data.title}</p>
-        ${data.changes}
+        <p class="title">${data.title ?? ""}</p>
+        ${data.changes ?? ""}
         `;
 
-        //  监听所有 A 链接点击
-        Array.from(document.querySelectorAll("a")).map((a) => {
+        //  监听内容区域内所有 A 链接点击
+        Array.from(contentRef.querySelectorAll("a")).map((a) => {
           a.addEventListener("click", (ev) => {
             ev.preventDefault();
 
-            ipcRenderer.send("evd-open-link", ev.target.href);
+            ipcRenderer.send("evd-open-link", a.href);
           });
         });
       });

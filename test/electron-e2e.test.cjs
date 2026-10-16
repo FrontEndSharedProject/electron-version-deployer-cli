@@ -1644,6 +1644,8 @@ async function main() {
           "resources/legacy.txt",
           "logicCode.part1.zip",
           "logicCode.part2.zip",
+          "evdUnzip.zip",
+          "_evdInstallerTmp.js",
         ],
       });
 
@@ -1688,6 +1690,16 @@ async function main() {
       appFilesAfter["logicCode.part2.zip"],
       null,
       "临时分片文件 logicCode.part2.zip 应在 finally 中被清理"
+    );
+    assertEqual(
+      appFilesAfter["evdUnzip.zip"],
+      null,
+      "临时压缩包 evdUnzip.zip 应在安装完成后被清理"
+    );
+    assertEqual(
+      appFilesAfter["_evdInstallerTmp.js"],
+      null,
+      "临时安装脚本 _evdInstallerTmp.js 应在安装完成后被清理"
     );
     assertEqual(
       appFilesAfter["resources/config.json"],

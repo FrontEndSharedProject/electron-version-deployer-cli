@@ -9,7 +9,11 @@ import {
   runDeployChecks,
   EVD_FOLDER,
 } from "../helpers/deployChecks";
-import { applyZipSplit, resolveZipSplitOptions } from "../helpers/zipSplit";
+import {
+  applyZipSplit,
+  extractZipSplitCLIOverride,
+  resolveZipSplitOptions,
+} from "../helpers/zipSplit";
 
 program
   .command("deploy")
@@ -23,20 +27,23 @@ program
     try {
       const configs = await getConfigs();
       const provider = getWhichProvider(configs);
+      const rawArgs =
+        command?.parent?.rawArgs ?? command?.rawArgs ?? process.argv;
 
       await runDeployChecks(
         configs,
         provider,
         createCheckPolicy({ interactive: true }),
-        extractMinVersionCLIOptions(
-          options,
-          command?.parent?.rawArgs ?? process.argv
-        )
+        extractMinVersionCLIOptions(options, rawArgs)
       );
 
       applyZipSplit(
         r(EVD_FOLDER),
-        resolveZipSplitOptions(configs, provider, options.split)
+        resolveZipSplitOptions(
+          configs,
+          provider,
+          extractZipSplitCLIOverride(options, rawArgs)
+        )
       );
 
       console.log(logSymbols.info, "开始部署", r());

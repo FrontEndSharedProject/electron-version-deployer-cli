@@ -143,6 +143,8 @@ let activeTracker: UpdateProgressTracker | null = null;
 let isUpdating = false;
 let isForceUpdate = false;
 let isRelaunching = false;
+let autoCheckIntervalId: NodeJS.Timeout | null = null;
+let autoCheckStartupTimeoutId: NodeJS.Timeout | null = null;
 
 function shouldForceUpdate(localVersionStr: string, remoteJSON: any): boolean {
   const minSupportedVersion = remoteJSON?.minSupportedVersion;
@@ -172,7 +174,16 @@ export function EVDInit(props: EVDInitPropsType) {
     readFileSync(join(appPath, "package.json"), "utf-8")
   );
 
-  setInterval(async () => {
+  if (autoCheckIntervalId) {
+    clearInterval(autoCheckIntervalId);
+    autoCheckIntervalId = null;
+  }
+  if (autoCheckStartupTimeoutId) {
+    clearTimeout(autoCheckStartupTimeoutId);
+    autoCheckStartupTimeoutId = null;
+  }
+
+  autoCheckIntervalId = setInterval(async () => {
     try {
       await EVDCheckUpdate();
     } catch (e) {
@@ -181,7 +192,7 @@ export function EVDInit(props: EVDInitPropsType) {
   }, 1000 * detectionFrequency);
 
   if (!detectAtStart) return;
-  setTimeout(async () => {
+  autoCheckStartupTimeoutId = setTimeout(async () => {
     try {
       await EVDCheckUpdate();
     } catch (e) {
@@ -844,7 +855,7 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
       tmpFilePaths.filter(existsSync).forEach(forceDeleteSync);
     }
   } else {
-    const pkgTypeLabel = zipFile === "fullCode.zip" ? "全量包" : "增量包";
+    const pkgTypeLabel = zipFile === FULL_CODE_ZIP_NAME ? "全量包" : "增量包";
     let finalDownloadSizeText = pkgTypeLabel;
     tracker.update({
       stage: "download",
@@ -898,283 +909,307 @@ async function installPkg(zipFile: string, tracker: UpdateProgressTracker) {
     });
   }
 
-  //  解压
-  let extractedCount = 0;
-  let totalZipEntries = 0;
-  let lastUnzipEntry = zipPath;
-
-  tracker.update({
-    stage: "unzip",
-    stageTitle: "正在解压更新包...",
-    percent: 46,
-    progressText: "准备解压...",
-    currentItem: zipPath,
-    stepValues: {
-      unzip: "解压中...",
-    },
-  });
-
   try {
-    await extract(zipPath, {
-      dir: unzipPath,
-      onEntry(entry, zipfile) {
-        extractedCount += 1;
-        totalZipEntries = zipfile?.entryCount || totalZipEntries;
-        lastUnzipEntry = entry.fileName;
-        const ratio =
-          totalZipEntries > 0
-            ? Math.min(1, extractedCount / totalZipEntries)
-            : 0.5;
-        const countLabel =
-          totalZipEntries > 0
-            ? `${extractedCount} / ${totalZipEntries} 个条目`
-            : `${extractedCount} 个条目`;
-        tracker.update(
-          {
-            stage: "unzip",
-            stageTitle: "正在解压更新包...",
-            percent: Math.round(46 + ratio * 24),
-            completed: extractedCount,
-            total: totalZipEntries || undefined,
-            progressText: countLabel,
-            currentItem: entry.fileName,
-            stepValues: {
-              unzip: countLabel,
-            },
-          },
-          extractedCount === 1 || extractedCount === totalZipEntries
-        );
+    //  解压
+    let extractedCount = 0;
+    let totalZipEntries = 0;
+    let lastUnzipEntry = zipPath;
+
+    tracker.update({
+      stage: "unzip",
+      stageTitle: "正在解压更新包...",
+      percent: 46,
+      progressText: "准备解压...",
+      currentItem: zipPath,
+      stepValues: {
+        unzip: "解压中...",
       },
     });
-  } catch (error) {
-    throw toEVDError(
-      error,
-      {
-        phase: EVDErrorPhaseEnum.INSTALL,
-        stage: "解压更新包",
-        progress:
-          totalZipEntries > 0
-            ? `${extractedCount} / ${totalZipEntries} 个条目`
-            : `${extractedCount} 个条目`,
-        filePath: lastUnzipEntry,
-      },
-      EVDErrorCodeEnum.UNZIP_FAILED
-    );
-  }
 
-  tracker.update({
-    stage: "unzip",
-    stageTitle: "更新包解压完成",
-    percent: 70,
-    completed: extractedCount,
-    total: totalZipEntries || extractedCount,
-    progressText: `✓ 共 ${totalZipEntries || extractedCount} 个条目`,
-    currentItem: unzipPath,
-    stepValues: {
-      unzip: `✓ 共 ${totalZipEntries || extractedCount} 个条目`,
-    },
-  });
-
-  //  等待解压完成，解压需要一定时间
-  await new Promise((res) => setTimeout(res, 1000));
-
-  //  创建一个临时的 _evdInstallerTmp.js 文件用于 fork 安装
-  //  避免出现 window 下资源占用问题
-  try {
-    writeFileSync(
-      installerFile,
-      Object.entries({
-        __unzipPath__: unzipPath,
-        __appPath__: appPath,
-      }).reduce((prev, current) => {
-        const [key, value] = current;
-        const normalized = value.split(sep).join("/");
-        return prev.replace(key, () => normalized);
-      }, installerCodeStr as string)
-    );
-  } catch (error) {
-    throw toEVDError(error, {
-      phase: EVDErrorPhaseEnum.INSTALL,
-      stage: "创建安装脚本",
-      filePath: installerFile,
-    });
-  }
-
-  tracker.update({
-    stage: "install",
-    stageTitle: "正在扫描并更新本地文件...",
-    percent: 72,
-    progressText: "计算需更新的文件数...",
-    currentItem: installerFile,
-    stepValues: {
-      install: "统计文件数...",
-    },
-  });
-
-  //  开始执行安装
-  const child = utilityProcess.fork(installerFile);
-  let lastCopiedFiles = 0;
-  let totalFilesToCopy = 0;
-  let lastCopyingFile = appPath;
-
-  //  等待子进程执行完毕，或者超过 5 分钟
-  await Promise.race([
-    new Promise<void>((res, rej) => {
-      let installError: EVDError | null = null;
-      let isDone = false;
-
-      const buildInstallerEVDError = ({
-        detail,
-        filePath,
-        completed,
-        total,
-        stack,
-      }: {
-        detail: string;
-        filePath?: string;
-        completed?: number;
-        total?: number;
-        stack?: string;
-      }) => {
-        const progressLabel =
-          typeof total === "number" && total > 0
-            ? `${completed ?? lastCopiedFiles} / ${total} 个文件`
-            : undefined;
-        return toEVDError(
-          detail,
-          {
-            phase: EVDErrorPhaseEnum.INSTALL,
-            stage: "更新本地文件",
-            progress: progressLabel,
-            filePath: filePath || lastCopyingFile,
-            cause: detail,
-            stack,
-            message: detail || undefined,
-          },
-          EVDErrorCodeEnum.INSTALL_FAILED
-        );
-      };
-
-      child.on("message", (msg: any) => {
-        if (msg && typeof msg === "object") {
-          if (msg.type === "progress") {
-            lastCopiedFiles = Number(msg.completed) || 0;
-            totalFilesToCopy = Number(msg.total) || 0;
-            if (msg.currentFile) {
-              lastCopyingFile = msg.currentFile;
-            }
-            const ratio =
-              totalFilesToCopy > 0
-                ? Math.min(1, lastCopiedFiles / totalFilesToCopy)
-                : 0.5;
-            const countText =
-              totalFilesToCopy > 0
-                ? `${lastCopiedFiles} / ${totalFilesToCopy} 个文件`
-                : `${lastCopiedFiles} 个文件`;
-            tracker.update(
-              {
-                stage: "install",
-                stageTitle: "正在更新本地文件...",
-                percent: Math.round(72 + ratio * 26),
-                completed: lastCopiedFiles,
-                total: totalFilesToCopy || undefined,
-                progressText: countText,
-                currentItem: lastCopyingFile,
-                stepValues: {
-                  install: countText,
-                },
+    try {
+      await extract(zipPath, {
+        dir: unzipPath,
+        onEntry(entry, zipfile) {
+          extractedCount += 1;
+          totalZipEntries = zipfile?.entryCount || totalZipEntries;
+          lastUnzipEntry = entry.fileName;
+          const ratio =
+            totalZipEntries > 0
+              ? Math.min(1, extractedCount / totalZipEntries)
+              : 0.5;
+          const countLabel =
+            totalZipEntries > 0
+              ? `${extractedCount} / ${totalZipEntries} 个条目`
+              : `${extractedCount} 个条目`;
+          tracker.update(
+            {
+              stage: "unzip",
+              stageTitle: "正在解压更新包...",
+              percent: Math.round(46 + ratio * 24),
+              completed: extractedCount,
+              total: totalZipEntries || undefined,
+              progressText: countLabel,
+              currentItem: entry.fileName,
+              stepValues: {
+                unzip: countLabel,
               },
-              lastCopiedFiles <= 1 || lastCopiedFiles === totalFilesToCopy
-            );
-            return;
-          }
-
-          if (msg.type === "error") {
-            installError = buildInstallerEVDError({
-              detail: msg.message || String(msg.code || ""),
-              filePath: msg.filePath,
-              completed: msg.completed,
-              total: msg.total,
-              stack: msg.stack,
-            });
-            rej(installError);
-            return;
-          }
-
-          if (msg.type === "done") {
-            isDone = true;
-            lastCopiedFiles = Number(msg.completed) || lastCopiedFiles;
-            totalFilesToCopy = Number(msg.total) || totalFilesToCopy;
-            res();
-            return;
-          }
-        }
-
-        if (typeof msg === "string" && msg.startsWith(INSTALLER_FAILED_PREFIX)) {
-          const detail = msg.slice(INSTALLER_FAILED_PREFIX.length);
-          installError = buildInstallerEVDError({ detail });
-          rej(installError);
-          return;
-        }
-        if (msg === INSTALLER_DONE_MESSAGE) {
-          isDone = true;
-          res();
-        }
-      });
-
-      child.on("exit", (code) => {
-        if (installError) {
-          rej(installError);
-          return;
-        }
-        if (!isDone && code && code !== 0) {
-          rej(
-            buildInstallerEVDError({
-              detail: `安装子进程异常退出 (exitCode=${code})`,
-              filePath: lastCopyingFile,
-              completed: lastCopiedFiles,
-              total: totalFilesToCopy,
-            })
+            },
+            extractedCount === 1 || extractedCount === totalZipEntries
           );
-          return;
-        }
-        res();
+        },
       });
-    }),
-    new Promise<void>((_, rej) =>
-      setTimeout(() => {
-        try {
-          child.kill();
-        } catch (e) {}
-        rej(
-          new EVDError(EVDErrorCodeEnum.INSTALL_FAILED, {
-            phase: EVDErrorPhaseEnum.INSTALL,
-            stage: "更新本地文件 (超时)",
-            progress:
-              totalFilesToCopy > 0
-                ? `${lastCopiedFiles} / ${totalFilesToCopy} 个文件`
-                : undefined,
-            filePath: lastCopyingFile,
-            cause: "安装文件超时（超过 5 分钟未完成）",
-          })
-        );
-      }, 5 * 60 * 1000)
-    ),
-  ]);
+    } catch (error) {
+      throw toEVDError(
+        error,
+        {
+          phase: EVDErrorPhaseEnum.INSTALL,
+          stage: "解压更新包",
+          progress:
+            totalZipEntries > 0
+              ? `${extractedCount} / ${totalZipEntries} 个条目`
+              : `${extractedCount} 个条目`,
+          filePath: lastUnzipEntry,
+        },
+        EVDErrorCodeEnum.UNZIP_FAILED
+      );
+    }
 
-  tracker.update({
-    stage: "relaunch",
-    stageTitle: "更新完成，正在重启应用...",
-    percent: 100,
-    completed: totalFilesToCopy || lastCopiedFiles,
-    total: totalFilesToCopy || lastCopiedFiles,
-    progressText: `✓ 已更新 ${totalFilesToCopy || lastCopiedFiles} 个文件`,
-    currentItem: "app.relaunch()",
-    stepValues: {
-      install: `✓ 共更新 ${totalFilesToCopy || lastCopiedFiles} 个文件`,
-      relaunch: "正在重启...",
-    },
-  });
+    tracker.update({
+      stage: "unzip",
+      stageTitle: "更新包解压完成",
+      percent: 70,
+      completed: extractedCount,
+      total: totalZipEntries || extractedCount,
+      progressText: `✓ 共 ${totalZipEntries || extractedCount} 个条目`,
+      currentItem: unzipPath,
+      stepValues: {
+        unzip: `✓ 共 ${totalZipEntries || extractedCount} 个条目`,
+      },
+    });
+
+    //  等待解压完成，解压需要一定时间
+    await new Promise((res) => setTimeout(res, 1000));
+
+    //  创建一个临时的 _evdInstallerTmp.js 文件用于 fork 安装
+    //  避免出现 window 下资源占用问题
+    try {
+      writeFileSync(
+        installerFile,
+        Object.entries({
+          __unzipPath__: unzipPath,
+          __appPath__: appPath,
+        }).reduce((prev, current) => {
+          const [key, value] = current;
+          const normalized = value.split(sep).join("/");
+          return prev.replace(key, () => normalized);
+        }, installerCodeStr as string)
+      );
+    } catch (error) {
+      throw toEVDError(error, {
+        phase: EVDErrorPhaseEnum.INSTALL,
+        stage: "创建安装脚本",
+        filePath: installerFile,
+      });
+    }
+
+    tracker.update({
+      stage: "install",
+      stageTitle: "正在扫描并更新本地文件...",
+      percent: 72,
+      progressText: "计算需更新的文件数...",
+      currentItem: installerFile,
+      stepValues: {
+        install: "统计文件数...",
+      },
+    });
+
+    //  开始执行安装
+    const child = utilityProcess.fork(installerFile);
+    let lastCopiedFiles = 0;
+    let totalFilesToCopy = 0;
+    let lastCopyingFile = appPath;
+    let installTimeoutId: NodeJS.Timeout | null = null;
+
+    //  等待子进程执行完毕，或者超过 5 分钟
+    try {
+      await Promise.race([
+        new Promise<void>((res, rej) => {
+          let installError: EVDError | null = null;
+          let isDone = false;
+
+          const buildInstallerEVDError = ({
+            detail,
+            filePath,
+            completed,
+            total,
+            stack,
+          }: {
+            detail: string;
+            filePath?: string;
+            completed?: number;
+            total?: number;
+            stack?: string;
+          }) => {
+            const progressLabel =
+              typeof total === "number" && total > 0
+                ? `${completed ?? lastCopiedFiles} / ${total} 个文件`
+                : undefined;
+            return toEVDError(
+              detail,
+              {
+                phase: EVDErrorPhaseEnum.INSTALL,
+                stage: "更新本地文件",
+                progress: progressLabel,
+                filePath: filePath || lastCopyingFile,
+                cause: detail,
+                stack,
+                message: detail || undefined,
+              },
+              EVDErrorCodeEnum.INSTALL_FAILED
+            );
+          };
+
+          child.on("message", (msg: any) => {
+            if (msg && typeof msg === "object") {
+              if (msg.type === "progress") {
+                lastCopiedFiles = Number(msg.completed) || 0;
+                totalFilesToCopy = Number(msg.total) || 0;
+                if (msg.currentFile) {
+                  lastCopyingFile = msg.currentFile;
+                }
+                const ratio =
+                  totalFilesToCopy > 0
+                    ? Math.min(1, lastCopiedFiles / totalFilesToCopy)
+                    : 0.5;
+                const countText =
+                  totalFilesToCopy > 0
+                    ? `${lastCopiedFiles} / ${totalFilesToCopy} 个文件`
+                    : `${lastCopiedFiles} 个文件`;
+                tracker.update(
+                  {
+                    stage: "install",
+                    stageTitle: "正在更新本地文件...",
+                    percent: Math.round(72 + ratio * 26),
+                    completed: lastCopiedFiles,
+                    total: totalFilesToCopy || undefined,
+                    progressText: countText,
+                    currentItem: lastCopyingFile,
+                    stepValues: {
+                      install: countText,
+                    },
+                  },
+                  lastCopiedFiles <= 1 || lastCopiedFiles === totalFilesToCopy
+                );
+                return;
+              }
+
+              if (msg.type === "error") {
+                installError = buildInstallerEVDError({
+                  detail: msg.message || String(msg.code || ""),
+                  filePath: msg.filePath,
+                  completed: msg.completed,
+                  total: msg.total,
+                  stack: msg.stack,
+                });
+                rej(installError);
+                return;
+              }
+
+              if (msg.type === "done") {
+                isDone = true;
+                lastCopiedFiles = Number(msg.completed) || lastCopiedFiles;
+                totalFilesToCopy = Number(msg.total) || totalFilesToCopy;
+                res();
+                return;
+              }
+            }
+
+            if (
+              typeof msg === "string" &&
+              msg.startsWith(INSTALLER_FAILED_PREFIX)
+            ) {
+              const detail = msg.slice(INSTALLER_FAILED_PREFIX.length);
+              installError = buildInstallerEVDError({ detail });
+              rej(installError);
+              return;
+            }
+            if (msg === INSTALLER_DONE_MESSAGE) {
+              isDone = true;
+              res();
+            }
+          });
+
+          child.on("exit", (code) => {
+            if (installError) {
+              rej(installError);
+              return;
+            }
+            if (!isDone && code && code !== 0) {
+              rej(
+                buildInstallerEVDError({
+                  detail: `安装子进程异常退出 (exitCode=${code})`,
+                  filePath: lastCopyingFile,
+                  completed: lastCopiedFiles,
+                  total: totalFilesToCopy,
+                })
+              );
+              return;
+            }
+            res();
+          });
+        }),
+        new Promise<void>((_, rej) => {
+          installTimeoutId = setTimeout(() => {
+            try {
+              child.kill();
+            } catch (e) {}
+            rej(
+              new EVDError(EVDErrorCodeEnum.INSTALL_FAILED, {
+                phase: EVDErrorPhaseEnum.INSTALL,
+                stage: "更新本地文件 (超时)",
+                progress:
+                  totalFilesToCopy > 0
+                    ? `${lastCopiedFiles} / ${totalFilesToCopy} 个文件`
+                    : undefined,
+                filePath: lastCopyingFile,
+                cause: "安装文件超时（超过 5 分钟未完成）",
+              })
+            );
+          }, 5 * 60 * 1000);
+        }),
+      ]);
+    } finally {
+      if (installTimeoutId) {
+        clearTimeout(installTimeoutId);
+      }
+    }
+
+    tracker.update({
+      stage: "relaunch",
+      stageTitle: "更新完成，正在重启应用...",
+      percent: 100,
+      completed: totalFilesToCopy || lastCopiedFiles,
+      total: totalFilesToCopy || lastCopiedFiles,
+      progressText: `✓ 已更新 ${totalFilesToCopy || lastCopiedFiles} 个文件`,
+      currentItem: "app.relaunch()",
+      stepValues: {
+        install: `✓ 共更新 ${totalFilesToCopy || lastCopiedFiles} 个文件`,
+        relaunch: "正在重启...",
+      },
+    });
+  } finally {
+    for (const tmpTarget of [zipPath, unzipPath, installerFile]) {
+      try {
+        if (existsSync(tmpTarget)) {
+          rmSync(tmpTarget, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+          });
+        }
+      } catch (e) {}
+    }
+  }
 }
 
 function removeUpdateIpcListeners() {
@@ -1261,6 +1296,19 @@ function bindEvent(promptWindow: BrowserWindow, onError) {
           stage: "获取远程版本信息",
           url: joinRemoteUrl(remoteUrl, "package.json"),
         });
+      }
+
+      if (
+        cacheCurrentPkgJSON?.version &&
+        shouldForceUpdate(cacheCurrentPkgJSON.version, pkg) &&
+        !isForceUpdate
+      ) {
+        isForceUpdate = true;
+        if (!promptWindow.isDestroyed()) {
+          promptWindow.setTitle(FORCE_UPDATE_TITLE);
+          notifyForceUpdateMode(promptWindow, true);
+          applyForceUpdateWindowPolicy(promptWindow);
+        }
       }
 
       tracker.setTargetVersion(pkg.version);

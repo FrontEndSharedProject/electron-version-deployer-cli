@@ -24,7 +24,7 @@ export class Netlify implements ProviderInterface {
   deploy(props: { folder: string; configs: EVDConfigType }): Promise<void> {
     const netlifyConfig = props.configs.netlify;
     if (!netlifyConfig) throw new Error("netlify 配置为空");
-    return new Promise<void>((res) => {
+    return new Promise<void>((res, rej) => {
       const cmd = platform() === "win32" ? "netlify.cmd" : "netlify";
       // prettier-ignore
       //  如果路径包含空格，需要用引号包裹
@@ -41,13 +41,14 @@ export class Netlify implements ProviderInterface {
         shell: true,
       });
 
+      output.on("error", rej);
       output.on("exit", function (code) {
         if (code === 0) {
           console.log(logSymbols.success, "部署完成！");
           res();
           return;
         }
-        throw new Error("部署失败！");
+        rej(new Error("部署失败！"));
       });
     });
   }

@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { createWriteStream, statSync } from "node:fs";
 import { basename } from "node:path";
 import archiver from "archiver";
 import { formatBytes } from "../utils";
@@ -24,6 +24,10 @@ export function archiveFiles(outputPath: string, files: string[]) {
       res();
     });
 
+    output.on("error", function (err: any) {
+      rej(err);
+    });
+
     // 当出现错误时触发 'error' 事件
     archive.on("error", function (err: any) {
       rej(err);
@@ -34,10 +38,10 @@ export function archiveFiles(outputPath: string, files: string[]) {
 
     // 将指定文件夹添加到 zip 文件中
     for (let filePath of files) {
-      if (~filePath.indexOf("package.json")) {
-        archive.file(filePath, { name: basename(filePath) });
-      } else {
+      if (statSync(filePath).isDirectory()) {
         archive.directory(filePath, basename(filePath));
+      } else {
+        archive.file(filePath, { name: basename(filePath) });
       }
     }
 

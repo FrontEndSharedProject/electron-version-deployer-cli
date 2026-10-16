@@ -155,6 +155,7 @@ export async function copySourceAndZipFiles(configs: EVDConfigType) {
     basename(codesPath),
     basename(nodeModulesPath),
     "package.json",
+    "evdUnzip",
   ]);
 
   for (const extraFolder of resolvedExtraFolders) {
@@ -328,5 +329,5 @@ async function compile(configs: EVDConfigType) {
 
 function genTmpFolder() {
   const folderPath = r("node_modules/.evd");
-  if (!existsSync(folderPath)) mkdirSync(folderPath);
+  if (!existsSync(folderPath)) mkdirSync(folderPath, { recursive: true });
 }

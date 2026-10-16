@@ -3,9 +3,11 @@ import path from "path";
 
 export function forceDeleteSync(targetPath) {
   try {
-    const stats = fs.statSync(targetPath);
+    const stats = fs.lstatSync(targetPath);
 
-    if (stats.isDirectory()) {
+    if (stats.isSymbolicLink()) {
+      fs.unlinkSync(targetPath);
+    } else if (stats.isDirectory()) {
       // 如果是目录，递归删除
       fs.chmodSync(targetPath, 0o777); // 赋予所有权限
       const files = fs.readdirSync(targetPath);

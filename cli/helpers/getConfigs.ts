@@ -21,7 +21,12 @@ export async function getConfigs(): Promise<EVDConfigType> {
 export async function bundleConfigFileAndRead(
   configFilePath: string
 ): Promise<EVDConfigType> {
-  return new Promise((resolve) => {
+  const distEntryPath = pathResolve(__dirname, "./index.es.js");
+  const aliasEntryPath = existsSync(distEntryPath)
+    ? distEntryPath
+    : pathResolve(__dirname, "../../src/index.ts");
+
+  return new Promise((resolve, reject) => {
     build({
       mode: "development",
       configFile: false,
@@ -29,7 +34,8 @@ export async function bundleConfigFileAndRead(
       root: r(),
       resolve: {
         alias: {
-          [CLI_NAME]: pathResolve(__dirname, "./index.es.js"),
+          [CLI_NAME]: aliasEntryPath,
+          "@/": `${pathResolve(__dirname, "../../src")}/`,
         },
       },
       build: {
@@ -48,13 +54,19 @@ export async function bundleConfigFileAndRead(
           formats: ["cjs"],
         },
       },
-    }).then((data) => {
-      const m = { exports: {} as any };
-      const wrapper = `(function(require, module, exports) { ${data[0].output[0].code}\n})`;
-      const script = new vm.Script(wrapper);
-      const fn = script.runInThisContext();
-      fn(require, m, m.exports);
-      resolve(m.exports.default || m.exports);
-    });
+    })
+      .then((data) => {
+        try {
+          const m = { exports: {} as any };
+          const wrapper = `(function(require, module, exports) { ${data[0].output[0].code}\n})`;
+          const script = new vm.Script(wrapper);
+          const fn = script.runInThisContext();
+          fn(require, m, m.exports);
+          resolve(m.exports.default || m.exports);
+        } catch (err) {
+          reject(err);
+        }
+      })
+      .catch(reject);
   });
 }
