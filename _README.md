@@ -538,7 +538,7 @@ $ npm install electron-version-deployer-cli@0.6.0
 - `evd install-prebuilt` 不等待下载完成，下载失败时以未捕获异常退出，现在等待全部下载并在失败时 `exit 1`。
 - `evd init` 在 `package.json` 没有 `name` 字段时报错。
 
-历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
+历史版本见 [_CHANGELOG.md](./_CHANGELOG.md)。
 
 ## 0.5.0 版本说明与升级指南
 
@@ -673,7 +673,7 @@ zipSplit: {
 - `remoteUrl` 带尾斜杠不再拼出 `//package.json`（部分 CDN 与对象存储会直接 404）
 - **`remoteUrl` 支持子目录形式的地址**，如 `https://cdn.example.com/app/my-project`
 
-完整清单见 [CHANGELOG.md](./CHANGELOG.md)。
+完整清单见 [_CHANGELOG.md](./_CHANGELOG.md)。
 
 ## 安装预构建
 

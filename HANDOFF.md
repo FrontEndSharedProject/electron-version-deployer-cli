@@ -1,6 +1,6 @@
 # 交接：electron-version-deployer-cli
 
-> 写于 2026-10-19。上一会话在旧路径完成 0.6.0 的审查修复、发版和 CI 调整，之后项目整体迁到了本目录。
+> 写于 2026-10-19，2026-10-25 更新。上一会话在旧路径完成 0.6.0 的审查修复、发版和 CI 调整，之后项目整体迁到了本目录。
 
 ## 1. 迁移后先确认环境
 
@@ -26,22 +26,22 @@
   - `2130a8c`：typecheck 兼容 TS 5.0（加 `--emitDeclarationOnly false`）。
   - `b1b9d96`：CI 调整。pnpm 9.14.2 加 `--frozen-lockfile`，action 升到 node24 运行时的版本，runner 固定为 `ubuntu-24.04`，版本已发布时跳过 publish。lockfile 也重新生成了，解决 archiver `^7` 和 lockfile 不一致的问题。
   - `4f8ee01`：README 的 0.6.0 章节加了「更新日志」小节，内容和 `CHANGELOG.md` 逐字一致。
-- 功能和行为以这些文件为准：`CHANGELOG.md` 的 `[0.6.0]`、README「0.6.0 版本说明与升级指南」、`docs/adr/0001-*`、`docs/adr/0002-*`、`GLOSSARY.md`。
+- 功能和行为以这些文件为准：`_CHANGELOG.md` 的 `[0.6.0]`、`_README.md`「0.6.0 版本说明与升级指南」、`docs/adr/0001-*`、`docs/adr/0002-*`、`GLOSSARY.md`。
+- **README 和 CHANGELOG 已加下划线改名**，现在是 `_README.md`、`_CHANGELOG.md`。用户的决定是 npm 不显示更新日志。npm 和 GitHub 都只把 `README*` 当作说明文档，所以改名后 GitHub 仓库首页不再显示 README，npm 从下次发版起也不再显示（0.6.0 的页面保持原样）。用户知道这些后果，选择了这样做。`CHANGELOG.md` 本来就不在 npm 包里。不要为了显示更新日志单独发版，也不要把文件名改回去。
 - 发版流程：
-  1. 改 `package.json` 版本号、`CHANGELOG.md`，以及 README 顶部公告和对应版本章节；
+  1. 改 `package.json` 版本号、`_CHANGELOG.md`，以及 `_README.md` 顶部公告和对应版本章节；
   2. push 到 `main`；
   3. CI（`.github/workflows/main.yml`）跑完 typecheck、单测和 build 后自动 `npm publish`。版本已存在时跳过发布，只输出一条 notice。最近一次 run 38993891249 成功。
 
 ## 3. 待用户拍板或可选的事项（都没做）
 
-1. **npm 页面的 README 没有新加的「更新日志」小节**。npm 显示的是 0.6.0 发布时的 README，要更新只能再发一个版本（比如不改代码的 0.6.1）。已经问过用户，还没有答复。
-2. **`npm pkg fix`**。发布时 npm 自动改了两处：`bin.evd` 从 `./dist/cli.cjs` 改成 `dist/cli.cjs`，`repository.url` 补上 `git+` 前缀。同时打出警告 `"bin[evd]" script name dist/cli.cjs was invalid and removed`。已核实不影响使用：registry 的 manifest 和 tarball 里都有 `bin`，实际装上 0.6.0 后 `.bin/evd` 也正常生成。想消掉这条警告，照这两处改 `package.json` 就行（`npm pkg fix` 还会顺便补上文件末尾的换行）。
-3. **CI 用的 Node 20 已经停止维护**。job 还是 `node-version: '20'`，可以升到 22 或 24。升到 24 后可以考虑去掉 "Update npm" 这一步，但要注意两点：provenance 需要 npm ≥ 11.5.1；npm 12 要求 node ≥ 22.22.2。
-4. **setup-node 的依赖缓存**。官方建议发布用的 workflow 关掉依赖缓存，防止缓存投毒，目前配的是 `cache: "pnpm"`。这个 workflow 只在 push `main` 时触发，风险不大。
-5. **npm 关于 2FA token 的通知**。0.6.0 的发布日志里有一条 `npm tokens that bypass 2FA are being restricted for account changes and direct publishing`（https://gh.io/npm-gat-bypass2fa-deprecation）。CI 用的是 OIDC trusted publishing（`NODE_AUTH_TOKEN` 只是占位），不受影响。如果账号下还有本地手动发版用的、能绕过 2FA 的 token，需要按链接迁移。
-6. **DEP0190 警告**。在 Node 26 下用 evd CLI 部署会出现 DEP0190，原因是 `child_process` 同时传了参数数组和 `shell: true`。位置在 `cli/commands/hostingProvider/Cloudflare.ts:40` 和 `cli/commands/hostingProvider/Netlify.ts:41`。
-7. **openspec 有个变更没归档**。`openspec/changes/fix-webpack-template-path` 的 tasks 已经全部完成（6/6），但还没归档。它对应的模板内嵌功能已经随 0.6.0 发布。
-8. **升级模拟中发现、还没处理的问题**：
+1. **`npm pkg fix`**。发布时 npm 自动改了两处：`bin.evd` 从 `./dist/cli.cjs` 改成 `dist/cli.cjs`，`repository.url` 补上 `git+` 前缀。同时打出警告 `"bin[evd]" script name dist/cli.cjs was invalid and removed`。已核实不影响使用：registry 的 manifest 和 tarball 里都有 `bin`，实际装上 0.6.0 后 `.bin/evd` 也正常生成。想消掉这条警告，照这两处改 `package.json` 就行（`npm pkg fix` 还会顺便补上文件末尾的换行）。
+2. **CI 用的 Node 20 已经停止维护**。job 还是 `node-version: '20'`，可以升到 22 或 24。升到 24 后可以考虑去掉 "Update npm" 这一步，但要注意两点：provenance 需要 npm ≥ 11.5.1；npm 12 要求 node ≥ 22.22.2。
+3. **setup-node 的依赖缓存**。官方建议发布用的 workflow 关掉依赖缓存，防止缓存投毒，目前配的是 `cache: "pnpm"`。这个 workflow 只在 push `main` 时触发，风险不大。
+4. **npm 关于 2FA token 的通知**。0.6.0 的发布日志里有一条 `npm tokens that bypass 2FA are being restricted for account changes and direct publishing`（https://gh.io/npm-gat-bypass2fa-deprecation）。CI 用的是 OIDC trusted publishing（`NODE_AUTH_TOKEN` 只是占位），不受影响。如果账号下还有本地手动发版用的、能绕过 2FA 的 token，需要按链接迁移。
+5. **DEP0190 警告**。在 Node 26 下用 evd CLI 部署会出现 DEP0190，原因是 `child_process` 同时传了参数数组和 `shell: true`。位置在 `cli/commands/hostingProvider/Cloudflare.ts:40` 和 `cli/commands/hostingProvider/Netlify.ts:41`。
+6. **openspec 有个变更没归档**。`openspec/changes/fix-webpack-template-path` 的 tasks 已经全部完成（6/6），但还没归档。它对应的模板内嵌功能已经随 0.6.0 发布。
+7. **升级模拟中发现、还没处理的问题**：
    - **旧客户端升级后留下临时文件**。0.5.2 客户端执行完升级后，应用目录里会留下 `evdUnzip.zip`（模拟中有 17MB）、`evdUnzip/` 和 `_evdInstallerTmp.js`。0.6.0 只在 `installPkg` 结束时清理这几个路径（`src/main.ts:745` 起），启动时不清理，所以这些文件要等到下一次更新才会被删掉。
    - **只按版本号判断是否替换依赖**。安装器只替换版本号变了的依赖（`src/installer.js:165` 的 `shouldReplaceModule`）。版本号没变但内容变了的依赖，比如用 patch-package 打过补丁的，不会随更新下发。
    - **没测签名和公证**。模拟里用的是 `identity: null`，也没做公证。

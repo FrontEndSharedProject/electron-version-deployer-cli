@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 //  解析 changelogs
 //  https://www.npmjs.com/package/changelog-parser
-const text = readFileSync("./CHANGELOG.md", "utf-8");
+const text = readFileSync("./_CHANGELOG.md", "utf-8");
 const res = parseChangelog({
   text: normalizeToOSEOL(text, {
     stripBOM: true,
